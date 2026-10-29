@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+DEFAULT_MIRROR = "https://github.com/NPCmillionaire/govint-data/releases/download"
+
+
 def _config_file() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
     return Path(base) / "govint" / "config.toml"
@@ -26,11 +29,14 @@ class Settings:
     data_gov_key: str  # api.data.gov key, used by FEC
     sam_key: str | None  # SAM.gov key; SAM is skipped without it
     data_dir: Path
+    mirror: str = DEFAULT_MIRROR  # GitHub releases base for prebuilt datasets
 
     @property
     def user_agent(self) -> str:
-        contact = f" {self.contact}" if self.contact else ""
-        return f"govint/0.1{contact}"
+        # SEC wants exactly "name email"; extra text gets a 403.
+        if self.contact:
+            return f"govint/0.1 {self.contact}"
+        return "govint/0.1 (+https://github.com/NPCmillionaire/govint)"
 
     @property
     def cache_path(self) -> Path:
@@ -57,6 +63,7 @@ def load() -> Settings:
         data_gov_key=pick("GOVINT_DATA_GOV_KEY", "data_gov_key") or "DEMO_KEY",
         sam_key=pick("GOVINT_SAM_KEY", "sam_key"),
         data_dir=data_dir,
+        mirror=pick("GOVINT_MIRROR", "mirror") or DEFAULT_MIRROR,
     )
 
 

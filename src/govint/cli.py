@@ -65,7 +65,8 @@ def main_opts(
 # ---------------------------------------------------------------- setup
 
 
-CONFIG_KEYS = {"contact": "Email for the SEC User-Agent (required by SEC)",
+CONFIG_KEYS = {"mirror": "Base URL for prebuilt dataset mirrors (GitHub releases)",
+               "contact": "Email for the SEC User-Agent (required by SEC)",
                "data_gov_key": "api.data.gov key for FEC (https://api.data.gov/signup/)",
                "sam_key": "SAM.gov API key (sam.gov > Account Details)"}
 
@@ -114,7 +115,8 @@ def sync(
     if dataset in ("faa", "all"):
         with err.status("loading FAA registry…"):
             try:
-                out.print(f"FAA: {faa.sync(c, file):,} aircraft")
+                n, where = faa.sync(c, file)
+                out.print(f"FAA: {n:,} aircraft from {where}")
             except SourceError as e:
                 err.print(f"[red]FAA failed:[/] {e}")
                 failed = True
@@ -122,6 +124,53 @@ def sync(
         die("dataset must be csl, faa, or all")
     if failed:
         raise typer.Exit(1)
+
+
+@app.command()
+def mirror(
+    dataset: str = typer.Argument("faa", help="Only faa for now."),
+    file: Optional[Path] = typer.Option(None, "--file", help="FAA zip to build from (default: download from faa.gov)."),
+    out_dir: Path = typer.Option(Path("mirror-out"), "--out", help="Where to write the build."),
+    publish: Optional[str] = typer.Option(None, "--publish", help="GitHub repo (owner/name) to upload the release to."),
+):
+    """Build (and optionally publish) a prebuilt dataset for `govint sync` to fall back on."""
+    import subprocess
+    import tempfile
+
+    from .sources import faa as faa_src
+    if dataset != "faa":
+        die("only 'faa' can be mirrored")
+    c = ctx()
+    if file is None:
+        file = Path(tempfile.mkdtemp()) / "ReleasableAircraft.zip"
+        with err.status("downloading from faa.gov…"):
+            try:
+                c.http.download(faa_src.URL, file)
+            except SourceError as e:
+                die(f"faa.gov download failed: {e}. Download it in a browser and pass --file.")
+    with err.status("building mirror…"):
+        m = faa_src.build_mirror(file, out_dir)
+    out.print(f"built {out_dir / m['file']}: {m['rows']:,} aircraft, data dated {m['data_date']}, "
+              f"{m['bytes'] / 1e6:.1f} MB, sha256 {m['sha256'][:12]}…")
+    if not publish:
+        return
+    tag = faa_src.MIRROR_TAG
+    files = [str(out_dir / m["file"]), str(out_dir / "faa.manifest.json")]
+    notes = (f"FAA aircraft registry, data dated {m['data_date']} ({m['rows']:,} aircraft), prebuilt for "
+             f"`govint sync faa`. Source: {faa_src.URL} (public domain, US government work).")
+    exists = subprocess.run(["gh", "release", "view", tag, "--repo", publish], capture_output=True).returncode == 0
+    if exists:
+        cmds = [["gh", "release", "upload", tag, *files, "--clobber", "--repo", publish],
+                ["gh", "release", "edit", tag, "--notes", notes, "--title", f"FAA registry {m['data_date']}",
+                 "--repo", publish]]
+    else:
+        cmds = [["gh", "release", "create", tag, *files, "--title", f"FAA registry {m['data_date']}",
+                 "--notes", notes, "--repo", publish]]
+    for cmd in cmds:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"{' '.join(cmd[:3])} failed: {r.stderr.strip()}")
+    out.print(f"published to https://github.com/{publish}/releases/tag/{tag}")
 
 
 @app.command()
@@ -134,7 +183,8 @@ def status():
     t.add_row("CSL sanctions", f"synced {_age(p)}" if p.exists() else "[yellow]not synced[/] (govint sync csl)")
     if faa.available(c):
         n = c.db().execute("select count(*) from faa_master").fetchone()[0]
-        t.add_row("FAA registry", f"{n:,} aircraft, synced {_age(s.db_path)}")
+        m = faa.meta(c)
+        t.add_row("FAA registry", f"{n:,} aircraft, data dated {m.get('data_date', '?')} (from {m.get('source', '?')})")
     else:
         t.add_row("FAA registry", "[yellow]not synced[/] (govint sync faa)")
     t.add_row("SEC contact", s.contact or "[red]unset[/] (govint config contact you@example.com)")

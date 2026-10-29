@@ -31,11 +31,11 @@ govint config contact you@example.com     # SEC requires a contact in the User-A
 govint config data_gov_key <key>          # https://api.data.gov/signup/
 govint config sam_key <key>               # optional, sam.gov > Account Details
 govint sync csl                           # ~30 MB, refresh weekly
-govint sync faa --file ~/Downloads/ReleasableAircraft.zip
+govint sync faa                           # tries faa.gov, falls back to the govint-data mirror
 govint status
 ```
 
-The FAA blocks scripted downloads. Download https://registry.faa.gov/database/ReleasableAircraft.zip in a browser and pass it with `--file`.
+The FAA often blocks scripted downloads. When it does, `govint sync faa` pulls a prebuilt copy from [govint-data](https://github.com/NPCmillionaire/govint-data/releases/tag/faa), which is refreshed weekly and verified by checksum. To use a file you downloaded yourself, run `govint sync faa --file ~/Downloads/ReleasableAircraft.zip`.
 
 Settings live in `~/.config/govint/config.toml` (mode 600). Env vars override them: `GOVINT_CONTACT`, `GOVINT_DATA_GOV_KEY`, `GOVINT_SAM_KEY`, `GOVINT_HOME` (data dir, default `~/.local/share/govint`).
 

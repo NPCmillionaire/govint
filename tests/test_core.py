@@ -166,6 +166,7 @@ def _faa_zip(path: Path) -> Path:
 
 def test_faa_load_lookup_and_owner_search(ctx, tmp_path):
     assert faa.load_zip(ctx, _faa_zip(tmp_path)) == 1
+    assert faa.meta(ctx)["data_date"]
     [a] = faa.lookup(ctx, "123ab")
     assert a["n_number"] == "N123AB" and a["model"].strip() == "G650" and a["registrant_type"] == "LLC"
     assert faa.lookup(ctx, "A0B1C2")[0]["n_number"] == "N123AB"
@@ -274,3 +275,30 @@ def test_sky_bbox_and_distance():
     lamin, lomin, lamax, lomax = sky.bbox(38.9, -77.0, 50)
     assert lamin < 38.9 < lamax and lomin < -77.0 < lomax
     assert 40 < sky.distance_km(38.9, -77.0, 38.9 + 50 / 111, -77.0) < 60
+
+
+def test_faa_mirror_build_and_install_roundtrip(ctx, tmp_path):
+    m = faa.build_mirror(_faa_zip(tmp_path), tmp_path / "out")
+    assert m["rows"] == 1 and len(m["sha256"]) == 64
+    assert faa.install_mirror(ctx, tmp_path / "out" / faa.MIRROR_FILE, m) == 1
+    assert faa.lookup(ctx, "N123AB")[0]["model"].strip() == "G650"
+    assert faa.meta(ctx)["source"] == "mirror"
+
+
+def test_faa_mirror_rejects_bad_checksum(ctx, tmp_path):
+    m = faa.build_mirror(_faa_zip(tmp_path), tmp_path / "out")
+    with pytest.raises(SourceError, match="checksum"):
+        faa.install_mirror(ctx, tmp_path / "out" / faa.MIRROR_FILE, {**m, "sha256": "0" * 64})
+
+
+@respx.mock
+def test_faa_sync_falls_back_to_mirror(ctx, tmp_path):
+    m = faa.build_mirror(_faa_zip(tmp_path), tmp_path / "out")
+    gz = (tmp_path / "out" / faa.MIRROR_FILE).read_bytes()
+    respx.get(faa.URL).mock(return_value=httpx.Response(403))
+    base = ctx.settings.mirror
+    respx.get(f"{base}/faa/faa.manifest.json").mock(return_value=httpx.Response(200, json=m))
+    respx.get(f"{base}/faa/{faa.MIRROR_FILE}").mock(return_value=httpx.Response(200, content=gz))
+    n, where = faa.sync(ctx)
+    assert n == 1 and where.startswith("mirror")
+    assert faa.lookup(ctx, "A0B1C2")[0]["n_number"] == "N123AB"
