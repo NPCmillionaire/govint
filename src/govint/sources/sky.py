@@ -123,10 +123,13 @@ def annotate(ctx: Ctx, planes: list[Plane], screen: bool = True) -> list[Plane]:
             p.flags.append("government")
         elif r.get("registrant_type") in CORPORATE and not _AIRLINE_CALLSIGN.match(p.callsign or ""):
             p.flags.append("corporate")
+        if "TRUSTEE" in p.owner.upper() or p.owner.upper().endswith(" TRUST"):
+            p.flags.append("held in trust (real owner hidden)")
         if r.get("type_registrant") == "8" or r.get("registrant_type") == "Non-Citizen Corporation":
             p.flags.append("foreign-owned")
         if have_csl and p.owner:
-            hits = csl.screen(ctx, p.owner)
+            us = r.get("registrant_type") not in ("Non-Citizen Corporation", "Non-Citizen Co-Owned")
+            hits = csl.screen(ctx, p.owner, country="US" if us else None)
             if hits:
                 p.flags.append(f"owner on {hits[0].record['source'].split(' - ')[0]}")
     return planes

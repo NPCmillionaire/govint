@@ -60,7 +60,16 @@ class Hit:
     record: dict
 
 
-def screen(ctx: Ctx, name: str, threshold: float = DEFAULT_THRESHOLD, limit: int = 10) -> list[Hit]:
+def record_countries(rec: dict) -> set[str]:
+    out = {a.get("country") for a in rec.get("addresses") or [] if a.get("country")}
+    if rec.get("country"):
+        out.add(rec["country"])
+    return {c.upper() for c in out}
+
+
+def screen(ctx: Ctx, name: str, threshold: float = DEFAULT_THRESHOLD, limit: int = 10,
+           country: str | None = None) -> list[Hit]:
+    """Fuzzy-screen a name. With `country`, drop listed entities known to be elsewhere."""
     p = path(ctx)
     if not p.exists():
         return []
@@ -74,7 +83,9 @@ def screen(ctx: Ctx, name: str, threshold: float = DEFAULT_THRESHOLD, limit: int
     best: dict[int, Hit] = {}
     for key, _, idx in cands:
         rec_i = owners[idx]
-        s = names.score(name, key)
+        s = names.score(name, key, person=records[rec_i].get("type") == "Individual")
+        if country and (where := record_countries(records[rec_i])) and country.upper() not in where:
+            continue
         if s >= threshold and (rec_i not in best or s > best[rec_i].score):
             best[rec_i] = Hit(s, key, records[rec_i])
     return sorted(best.values(), key=lambda h: -h.score)[:limit]

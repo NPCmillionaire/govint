@@ -222,12 +222,12 @@ def test_address_key_unifies_abbreviations():
 
 
 def test_person_names_match_across_order_and_patronymic():
-    assert names.score("Viktor Vekselberg", "VEKSELBERG, Viktor Feliksovich") >= 88
-    assert names.score("Oleg Deripaska", "DERIPASKA, Oleg Vladimirovich") >= 88
+    assert names.score("Viktor Vekselberg", "VEKSELBERG, Viktor Feliksovich", person=True) >= 88
+    assert names.score("Oleg Deripaska", "DERIPASKA, Oleg Vladimirovich", person=True) >= 88
 
 
 def test_shared_first_name_or_single_word_alias_is_not_a_match():
-    assert names.score("Alexander Karp", "ALEXANDER KOVAR") < 88
+    assert names.score("Alexander Karp", "ALEXANDER KOVAR", person=True) < 88
     assert names.score("Mohammed Ali", "Ali") < 88
     assert names.score("Rosneft", "Open Joint-Stock Company Rosneft Oil Company") < 100
 
@@ -302,3 +302,28 @@ def test_faa_sync_falls_back_to_mirror(ctx, tmp_path):
     n, where = faa.sync(ctx)
     assert n == 1 and where.startswith("mirror")
     assert faa.lookup(ctx, "A0B1C2")[0]["n_number"] == "N123AB"
+
+
+def test_inserted_word_is_a_different_company():
+    assert names.score("UNITED AIRLINES INC", "UNITED AFRICAN AIRLINES") < 88
+    assert names.score("Oleg Deripaska", "DERIPASKA, Oleg Vladimirovich", person=True) >= 88
+
+
+@pytest.mark.parametrize("query,candidate", [
+    ("PARIS AIR INC", "PARS AIR"), ("SIERRA ALPHA GROUP LLC", "ALPHA GROUP"),
+    ("WINGS AVIATION INC", "GOLDEN WINGS AVIATION"), ("ESM AVIATION LLC", "QESHM AVIATION"),
+    ("HUNTER AVIATION INTERNATIONAL INC", "AVIATION INTERNATIONAL"), ("ROTORX LLC", "ROTOR"),
+    ("NORTH STAR EQUIPMENT LLC", "NORTH STAR"), ("GREENE CO", "GREEN"),
+])
+def test_common_word_company_names_do_not_collide(query, candidate):
+    assert names.score(query, candidate) < 88
+
+
+@pytest.mark.parametrize("query,candidate", [
+    ("Hikvision", "Hangzhou Hikvision Digital Technology Co., Ltd."),
+    ("Sberbank", "JOINT STOCK COMPANY SBERBANK"), ("Kaspersky Lab", "Kaspersky Labs Limited"),
+    ("Rosneft", "OPEN JOINT-STOCK COMPANY ROSNEFT OIL COMPANY"),
+    ("Huawei Technologies", "HUAWEI TECHNOLOGIES CO., LTD."),
+])
+def test_real_sanctioned_companies_still_match(query, candidate):
+    assert names.score(query, candidate) >= 88
