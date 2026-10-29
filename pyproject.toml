@@ -1,0 +1,29 @@
+[project]
+name = "govint"
+version = "0.1.0"
+description = "Public-records OSINT: pivot across SEC, sanctions, contracts, FEC, LEI and FAA data"
+readme = "README.md"
+authors = [
+    { name = "cam", email = "npcmillionaire@pm.me" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "networkx>=3.7",
+    "rapidfuzz>=3.14.6",
+    "rich>=15.0.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+govint = "govint.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "respx>=0.23.1",
+]
