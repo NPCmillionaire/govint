@@ -23,6 +23,8 @@ govint brief "Palantir Technologies" -o palantir.md
 | OpenSky / your receiver | Live ADS-B positions, joined to the FAA registry | No |
 | Census geocoder | Street address to coordinates for `sky now` | No |
 | FARA (DOJ) | Registered foreign agents, the countries and companies they represent, and their staff | No |
+| EPA ECHO | Regulated facilities near a location, with violations and penalties | No |
+| USGS / NWS | Earthquake history and active weather alerts for a location | No |
 
 ## Setup
 
@@ -60,6 +62,8 @@ govint congress member NAME                                       # committees +
 govint congress flags [--days 120] [--contracts] [--min-score 2]  # ranked: committee overlap, late filing,
                                                                   #   size, contract spikes vs. the company's norm
 govint fara "Huawei Technologies" | "Mercury Public Affairs" | Qatar   # who represents whom
+govint near "1600 Pennsylvania Ave NW, Washington DC" [-r 1]     # representatives, EPA violators, local
+                                                                  #   federal contracts, aircraft operators, quakes
 govint watch add company|ticker|tail|owner|keyword VALUE          # then: govint watch run (cron/systemd)
 govint leaks "Apple Inc" "Dexcom" [--days 90] [--all] [--new]     # FDA filings that reveal products
 govint sky now "1600 Pennsylvania Ave NW, Washington DC" [-r 25] [--feed http://pi:8080/data/aircraft.json] [--all]

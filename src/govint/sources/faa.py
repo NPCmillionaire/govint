@@ -30,12 +30,12 @@ AC_TYPE = {"1": "Glider", "2": "Balloon", "3": "Blimp", "4": "Fixed wing single 
            "9": "Gyroplane", "H": "Hybrid lift", "O": "Other"}
 
 COLS = ["n_number", "serial", "mfr_mdl_code", "year_mfr", "type_registrant", "name", "street",
-        "street2", "city", "state", "zip", "country", "last_action", "cert_issue", "status",
+        "street2", "city", "state", "zip", "county", "country", "last_action", "cert_issue", "status",
         "mode_s_hex", "fract_owner", "other_names", "expiration"]
 SRC_COLS = {"N-NUMBER": "n_number", "SERIAL NUMBER": "serial", "MFR MDL CODE": "mfr_mdl_code",
             "YEAR MFR": "year_mfr", "TYPE REGISTRANT": "type_registrant", "NAME": "name",
             "STREET": "street", "STREET2": "street2", "CITY": "city", "STATE": "state",
-            "ZIP CODE": "zip", "COUNTRY": "country", "LAST ACTION DATE": "last_action",
+            "ZIP CODE": "zip", "COUNTY": "county", "COUNTRY": "country", "LAST ACTION DATE": "last_action",
             "CERT ISSUE DATE": "cert_issue", "STATUS CODE": "status", "MODE S CODE HEX": "mode_s_hex",
             "FRACT OWNER": "fract_owner", "EXPIRATION DATE": "expiration"}
 
@@ -52,6 +52,7 @@ INDEXES = [
     "create index if not exists faa_n on faa_master(n_number)",
     "create index if not exists faa_hex on faa_master(mode_s_hex)",
     "create index if not exists faa_norm on faa_master(norm_name)",
+    "create index if not exists faa_county on faa_master(state, county)",
 ]
 MIRROR_FILE = "faa.sqlite.gz"
 MIRROR_TAG = "faa"

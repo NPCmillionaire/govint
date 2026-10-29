@@ -1004,3 +1004,70 @@ def fara_cmd(
             for a in ags[:15]:
                 b.add(f"{a['first']} {a['last']} [dim](since {a['since']})[/]")
         out.print(root)
+
+
+@app.command()
+def near(
+    where: str = typer.Argument(..., help="US street address or 'lat,lon'."),
+    radius: float = typer.Option(1.0, "--radius", "-r", help="Miles, for EPA facilities."),
+):
+    """Everything public records say about a place."""
+    from .sources import near as nr
+    from .sources import sky
+    c = ctx()
+    try:
+        lat, lon = sky.place(c, where)
+    except SourceError as e:
+        die(str(e))
+    with err.status("checking sources…"):
+        rep = nr.report(c, lat, lon, radius)
+    if STATE["json"]:
+        import dataclasses
+        return emit_json(dataclasses.asdict(rep))
+    p = rep.place
+    dist = "at-large" if p.district == 0 else (f"district {p.district}" if p.district else "district ?")
+    out.print(f"[b]{p.city or '?'}, {p.county} ({p.state})[/]  census tract {p.tract}, congressional {dist}  "
+              f"[dim]{lat:.5f},{lon:.5f}[/]")
+    if rep.alerts:
+        for a in rep.alerts:
+            out.print(f"[red]NWS {a['severity']}:[/] {a['headline'] or a['event']}")
+    if rep.reps:
+        t = Table(title="Represented by")
+        for col in ("Member", "Chamber", "Party", "Committees", "Disclosed trades"):
+            t.add_column(col, overflow="fold")
+        for r in rep.reps:
+            t.add_row(r["name"], r["chamber"], r["party"], "; ".join(r["committees"][:4]),
+                      str(r["trades"]) if r["chamber"] == "house" else "[dim]n/a (Senate)[/]")
+        out.print(t)
+    if rep.facility_count and not rep.facilities:
+        out.print(f"EPA: {rep.facility_count} regulated facilities within {radius:g} mi, none with recent violations or penalties.")
+    if rep.facilities:
+        t = Table(title=f"EPA: {rep.facility_count} regulated facilities within {radius:g} mi; "
+                        f"{len(rep.facilities)} with violations or penalties")
+        for col in ("Facility", "Address", "Industry", "Status", "Qtrs in violation", "Penalties", "Report"):
+            t.add_column(col, overflow="fold")
+        for f in rep.facilities[:12]:
+            status = "[red]significant violator[/]" if f["significant_violator"] else (f["status"] or "")
+            t.add_row(f["name"] + (" [dim](federal)[/]" if f["federal"] else ""), f["address"], f["industry"],
+                      status, str(f["quarters_in_violation"]), usd(f["penalties"]) if f["penalties"] else "", f["url"])
+        out.print(t)
+    if rep.contracts:
+        t = Table(title=f"Biggest federal contracts performed in {p.county} with activity in the last 12 months")
+        for col in ("Recipient", "Lifetime value", "Agency", "What"):
+            t.add_column(col, overflow="fold")
+        for k in rep.contracts:
+            t.add_row(k["recipient"], usd(k["amount"]), k["agency"], k["description"])
+        out.print(t)
+    if rep.aircraft_count:
+        out.print(f"\n[b]{rep.aircraft_count:,} aircraft registered in {p.county}[/]"
+                  + (". Biggest multi-engine / helicopter operators:" if rep.aircraft else ""))
+        for a in rep.aircraft:
+            tails = a["tails"].split()
+            more = f" +{len(tails) - 4} more" if len(tails) > 4 else ""
+            out.print(f"  {a['n']:>3}  {a['name']} ({a['city']})  [dim]{(a['models'] or '')[:40]}; "
+                      f"{' '.join(tails[:4])}{more}[/]")
+    if rep.quakes:
+        out.print("\n[b]Strongest earthquakes within 100 km, last 10 years:[/] " + "; ".join(
+            f"M{q['mag']} {q['when']} ({q['place']})" for q in rep.quakes[:3]))
+    for n in rep.notes:
+        err.print(f"[yellow]note:[/] {n}")

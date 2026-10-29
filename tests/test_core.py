@@ -360,3 +360,24 @@ def test_fara_sync_search_and_graph(ctx):
     r = fara.result(ctx, subj)
     assert "registered-foreign-agent" in subj.flags
     assert [e.rel for e in r.edges] == ["foreign_agent_for"]
+
+
+@respx.mock
+def test_near_locate_reads_census_geographies(ctx):
+    from govint.sources import near
+    respx.get(url__startswith=near.CENSUS_GEO).mock(return_value=httpx.Response(200, json={"result": {"geographies": {
+        "States": [{"STATE": "48", "NAME": "Texas"}],
+        "Counties": [{"NAME": "Tarrant County", "COUNTY": "439"}],
+        "Census Tracts": [{"NAME": "Census Tract 9800"}],
+        "Incorporated Places": [{"NAME": "Grapevine city"}],
+        "120th Congressional Districts": [{"NAME": "Congressional District 24", "BASENAME": "24"}],
+    }}}))
+    p = near.locate(ctx, 32.9, -97.04)
+    assert (p.state, p.county_fips, p.district, p.city) == ("TX", "439", 24, "Grapevine city")
+
+
+def test_near_aircraft_by_county(ctx, tmp_path):
+    from govint.sources import near
+    faa.load_zip(ctx, _faa_zip(tmp_path))
+    total, ops = near.aircraft(ctx, near.Place(30.2, -97.7, state="TX", county_fips="453"))
+    assert total == 1 and ops[0]["name"] == "ACME AVIATION LLC" and ops[0]["n"] == 1
