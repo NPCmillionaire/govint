@@ -22,6 +22,7 @@ govint brief "Palantir Technologies" -o palantir.md
 | openFDA | Device clearances (510k, De Novo, PMA), new device listings, drug approvals | No |
 | OpenSky / your receiver | Live ADS-B positions, joined to the FAA registry | No |
 | Census geocoder | Street address to coordinates for `sky now` | No |
+| FARA (DOJ) | Registered foreign agents, the countries and companies they represent, and their staff | No |
 
 ## Setup
 
@@ -30,7 +31,8 @@ uv tool install --editable ~/code/govint
 govint config contact you@example.com     # SEC requires a contact in the User-Agent
 govint config data_gov_key <key>          # https://api.data.gov/signup/
 govint config sam_key <key>               # optional, sam.gov > Account Details
-govint sync csl                           # ~30 MB, refresh weekly
+govint sync csl                           # sanctions list, ~30 MB, refresh weekly
+govint sync fara                          # foreign agents, ~2 MB
 govint sync faa                           # tries faa.gov, falls back to the govint-data mirror
 govint status
 ```
@@ -57,6 +59,8 @@ govint congress trades [-m MEMBER] [-t TICKER] [--days N]
 govint congress member NAME                                       # committees + trading summary
 govint congress flags [--days 120] [--contracts] [--min-score 2]  # ranked: committee overlap, late filing,
                                                                   #   size, contract spikes vs. the company's norm
+govint fara "Huawei Technologies" | "Mercury Public Affairs" | Qatar   # who represents whom
+govint watch add company|ticker|tail|owner|keyword VALUE          # then: govint watch run (cron/systemd)
 govint leaks "Apple Inc" "Dexcom" [--days 90] [--all] [--new]     # FDA filings that reveal products
 govint sky now "1600 Pennsylvania Ave NW, Washington DC" [-r 25] [--feed http://pi:8080/data/aircraft.json] [--all]
 govint sky watch --owner "ACME AVIATION LLC" [--tail N123AB] [--interval 120] [--once]
@@ -66,6 +70,7 @@ govint sky watch --owner "ACME AVIATION LLC" [--tail N123AB] [--interval 120] [-
 
 - **congress**: covers the House only. The Senate's eFD site puts its data behind a click-through agreement, so it isn't scraped. 2025–2026 is about 11k trades and syncs in roughly 4 minutes. Paper filings (scanned images) are counted and skipped. Committee overlap is matched by SEC industry code (SIC), so treat it as a lead and check the linked PTR before concluding anything.
 - **leaks**: `--new` remembers what it has already shown, so `govint leaks --new "Apple Inc"` works in cron. The FCC equipment-authorization site blocks scripted access, so `--fcc-grantee BCG` only prints links to open in a browser.
+- **watch**: the first run for each item records what already exists without alerting; later runs report only new items. Set `govint config ntfy <topic>` to get phone notifications through [ntfy](https://ntfy.sh). `contrib/` has a systemd timer for running it every 30 minutes on a Pi.
 - **sky**: needs the FAA registry synced to name owners. Anonymous OpenSky requests are rate-limited, so keep `watch --interval` at 60s or more, or point `--feed` at a local dump1090/readsb receiver.
 
 `--json` before any command gives machine-readable output. `--no-cache` bypasses the 24h HTTP cache.

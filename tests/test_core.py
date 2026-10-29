@@ -1,3 +1,4 @@
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -327,3 +328,35 @@ def test_common_word_company_names_do_not_collide(query, candidate):
 ])
 def test_real_sanctioned_companies_still_match(query, candidate):
     assert names.score(query, candidate) >= 88
+
+
+def _zip_csv(text: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("data.csv", text)
+    return buf.getvalue()
+
+
+@respx.mock
+def test_fara_sync_search_and_graph(ctx):
+    from govint.sources import fara
+    files = {
+        "FARA_All_Registrants": '"Registration Number","Registration Date","Termination Date","Name","Business Name","Address 1","Address 2","City","State","Zip"\n'
+                                '"7","01/02/2025","","Acme Public Affairs, LLC","","","","Washington","DC","20001"\n',
+        "FARA_All_ForeignPrincipals": '"Foreign Principal Termination Date","Foreign Principal","Foreign Principal Registration Date","Country/Location Represented","Registration Number","Registrant Date","Registrant Name","Address 1","Address 2","City","State","Zip"\n'
+                                      '"","Ministry of Widgets","01/03/2025","RURITANIA","7","01/02/2025","Acme Public Affairs, LLC","","","","",""\n',
+        "FARA_All_ShortForms": '"Short Form Termination Date","Short Form Date","Short Form Last Name","Short Form First Name","Registration Number","Registration Date","Registrant Name","Address 1","Address 2","City","State","Zip"\n'
+                               '"","01/04/2025","Doe","Jane","7","01/02/2025","Acme Public Affairs, LLC","","","","",""\n',
+    }
+    for name, text in files.items():
+        respx.get(fara.BULK.format(name=name)).mock(return_value=httpx.Response(200, content=_zip_csv(text)))
+    assert fara.sync(ctx)["fara_principals"] == 1
+    [reg] = fara.search(ctx, "Acme Public Affairs")
+    assert reg.matched_as == "registrant" and reg.principals[0]["country"] == "RURITANIA"
+    assert fara.search(ctx, "Jane Doe")[0].matched_as == "agent"
+    assert fara.search(ctx, "Ministry of Widgets")[0].matched_as == "principal"
+    assert fara.by_country(ctx, "ruritania")[0]["registrant"] == "Acme Public Affairs, LLC"
+    subj = Node("q", COMPANY, "Acme Public Affairs")
+    r = fara.result(ctx, subj)
+    assert "registered-foreign-agent" in subj.flags
+    assert [e.rel for e in r.edges] == ["foreign_agent_for"]

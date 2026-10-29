@@ -100,10 +100,10 @@ def config_cmd(key: Optional[str] = typer.Argument(None), value: Optional[str] =
 
 @app.command()
 def sync(
-    dataset: str = typer.Argument("all", help="csl, faa, or all"),
+    dataset: str = typer.Argument("all", help="csl, faa, fara, or all"),
     file: Optional[Path] = typer.Option(None, "--file", help="Use an already-downloaded FAA zip."),
 ):
-    """Download bulk datasets for offline screening (CSL sanctions, FAA registry)."""
+    """Download bulk datasets for offline use (sanctions list, FAA registry, FARA)."""
     c = ctx()
     failed = False
     if dataset in ("csl", "all"):
@@ -121,8 +121,18 @@ def sync(
             except SourceError as e:
                 err.print(f"[red]FAA failed:[/] {e}")
                 failed = True
-    if dataset not in ("csl", "faa", "all"):
-        die("dataset must be csl, faa, or all")
+    if dataset in ("fara", "all"):
+        from .sources import fara as fara_src
+        with err.status("downloading FARA registrations…"):
+            try:
+                n = fara_src.sync(c)
+                out.print(f"FARA: {n['fara_registrants']:,} registrants, {n['fara_principals']:,} foreign "
+                          f"principals, {n['fara_agents']:,} individual agents")
+            except SourceError as e:
+                err.print(f"[red]FARA failed:[/] {e}")
+                failed = True
+    if dataset not in ("csl", "faa", "fara", "all"):
+        die("dataset must be csl, faa, fara, or all")
     if failed:
         raise typer.Exit(1)
 
@@ -947,3 +957,50 @@ def watch_run(
         if not loop:
             return
         time.sleep(loop * 60)
+
+
+@app.command("fara")
+def fara_cmd(
+    name: str,
+    show_all: bool = typer.Option(False, "--all", help="Include terminated registrations."),
+):
+    """Foreign agents: who represents a country or company, or whom a firm or person represents."""
+    from .sources import fara as fara_src
+    c = ctx()
+    if not fara_src.available(c):
+        die("FARA not synced. Run: govint sync fara")
+    countries = fara_src.by_country(c, name, active_only=not show_all)
+    if countries:
+        if STATE["json"]:
+            return emit_json(countries)
+        t = Table(title=f"FARA: {len(countries)} {'' if show_all else 'active '}foreign principals from {name.upper()}")
+        for col in ("Foreign principal", "Represented by", "Since", "Until", "Reg #"):
+            t.add_column(col, overflow="fold")
+        for r in countries:
+            t.add_row(r["principal"], r["registrant"], r["since"], r["until"] or "", r["reg"])
+        out.print(t)
+        return
+    regs = fara_src.search(c, name)
+    if not show_all:
+        regs = [r for r in regs if r.active or r.matched_as == "principal"]
+    if STATE["json"]:
+        return emit_json([r.__dict__ | {"url": r.url} for r in regs])
+    if not regs:
+        out.print("No FARA registrations match." + ("" if show_all else " (--all includes terminated ones)"))
+        return
+    for r in regs:
+        status = "[green]active[/]" if r.active else f"[dim]terminated {r.terminated}[/]"
+        root = Tree(f"[b]{r.registrant}[/]  #{r.reg}  {status}  [dim]matched as {r.matched_as}, "
+                    f"score {r.score:.0f}[/]  {r.url}")
+        ps = [p for p in r.principals if show_all or not p["until"]]
+        if ps:
+            b = root.add(f"[cyan]represents {len(ps)} foreign principal(s)[/]")
+            for p in ps[:20]:
+                b.add(f"{p['principal']} [dim]({p['country']}, since {p['since']}"
+                      + (f", until {p['until']}" if p["until"] else "") + ")[/]")
+        ags = [a for a in r.agents if show_all or not a["until"]]
+        if ags:
+            b = root.add(f"[cyan]{len(ags)} registered individual agent(s)[/]")
+            for a in ags[:15]:
+                b.add(f"{a['first']} {a['last']} [dim](since {a['since']})[/]")
+        out.print(root)

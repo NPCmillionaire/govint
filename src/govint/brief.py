@@ -13,6 +13,7 @@ FLAG_TEXT = {
     "sam-exclusion-possible": "Name resembles a SAM.gov exclusion record; verify",
     "name-churn": "Three or more former names on file with the SEC",
     "listed": "Appears on a screening list",
+    "registered-foreign-agent": "Active registration under the Foreign Agents Registration Act",
 }
 
 
@@ -117,6 +118,23 @@ def render(g: Graph, seed: Node) -> str:
             L.append(f"| {_link(p)}{fl} | {e.props.get('role')} | {e.props.get('last_filing')} | "
                      f"{_usd(e.props.get('bought_usd')) if e.props.get('bought_usd') else ''} | "
                      f"{_usd(e.props.get('sold_usd')) if e.props.get('sold_usd') else ''} |")
+        L.append("")
+
+    # FARA
+    fara_e = [e for e in g.edges.values() if e.rel in ("foreign_agent_for", "fara_agent_at",
+                                                        "represented_by_foreign_agent")]
+    if fara_e:
+        L.append("## Foreign agents (FARA)")
+        for e in fara_e:
+            a, b = g.nodes[e.src], g.nodes[e.dst]
+            if e.rel == "foreign_agent_for":
+                end = f" until {e.props['until']}" if e.props.get("until") else " (active)"
+                L.append(f"- {_link(a)} represents {_link(b)} ({e.props.get('country')}), since "
+                         f"{e.props.get('since')}{end}")
+            elif e.rel == "fara_agent_at":
+                L.append(f"- {a.label} is a registered agent at {_link(b)}")
+            else:
+                L.append(f"- {a.label} is represented in the US by {_link(b)}")
         L.append("")
 
     # Congress
