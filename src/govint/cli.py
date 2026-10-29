@@ -49,7 +49,7 @@ def usd(x) -> str:
         return ""
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main_opts(
     no_cache: bool = typer.Option(False, "--no-cache", help="Bypass the local HTTP cache."),
     as_json: bool = typer.Option(False, "--json", help="Machine-readable output."),
