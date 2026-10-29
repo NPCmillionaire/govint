@@ -8,7 +8,7 @@ from typing import Callable
 from . import names
 from .graph import COMPANY, PERSON, Edge, Graph, Node, Result
 from .http import SourceError
-from .sources import csl, edgar, faa, fec, gleif, sam, usaspending
+from .sources import congress, csl, edgar, faa, fec, gleif, sam, usaspending
 from .sources.base import Ctx, cite
 
 Progress = Callable[[str], None]
@@ -37,10 +37,28 @@ def _edgar(ctx: Ctx, subject: Node, insiders: bool = True) -> Result:
                         source=company.sources[0]))
     if insiders:
         r.extend(edgar.insiders_result(ctx, best["cik"], company.label))
+    r.extend(_congress(ctx, company))
     # EDGAR often knows the LEI; hand it to GLEIF so we don't rely on fuzzy names.
     if lei := company.props.get("lei"):
         g = gleif.result(ctx, company, lei=lei)
         r.extend(g)
+    return r
+
+
+def _congress(ctx: Ctx, company: Node) -> Result:
+    """Members of Congress who disclosed trades in this company's stock."""
+    r = Result()
+    if not congress.available(ctx):
+        return r
+    for ticker in company.props.get("tickers") or []:
+        for t in congress.trades(ctx, ticker=ticker, limit=100):
+            who = Node(id=f"person:congress:{names.normalize(t['member'])}", kind=PERSON,
+                       label=f"Rep. {t['member']} ({t['state_dst']})", props={"chamber": t["chamber"]},
+                       sources=[cite("House Clerk PTR", t["url"])])
+            r.nodes.append(who)
+            r.edges.append(Edge(who.id, company.id, f"congress_trade:{t['doc_id']}:{t['date']}:{t['type']}:{t['amount_min']}",
+                                props={k: t[k] for k in ("type", "date", "filed", "amount", "owner", "ticker")},
+                                source=cite("House Clerk PTR", t["url"])))
     return r
 
 

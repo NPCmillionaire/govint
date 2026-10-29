@@ -17,6 +17,11 @@ govint brief "Palantir Technologies" -o palantir.md
 | FEC | Corporate PACs, who the PACs pay, donations by employees | Free api.data.gov key (DEMO_KEY works but is heavily rate limited) |
 | SAM.gov | Registration, CAGE code, exclusions (debarments) | Free SAM.gov key |
 | FAA registry | Aircraft by tail number, Mode S hex, or owner name, offline | No |
+| House Clerk PTRs | Every House member's disclosed stock trade, parsed from the PDFs | No |
+| congress-legislators | Current members and committee assignments (mirrors official rosters) | No |
+| openFDA | Device clearances (510k, De Novo, PMA), new device listings, drug approvals | No |
+| OpenSky / your receiver | Live ADS-B positions, joined to the FAA registry | No |
+| Census geocoder | Street address to coordinates for `sky now` | No |
 
 ## Setup
 
@@ -46,7 +51,22 @@ govint fec NAME [--person]                                        # PACs, employ
 govint lei NAME                                                   # corporate parent/child chain
 govint tail N12345 | --owner NAME                                 # FAA aircraft registry
 govint sam NAME                                                   # SAM registration + exclusions
+
+govint congress sync [YEARS...]                                   # parse House PTRs (default: this year + last)
+govint congress trades [-m MEMBER] [-t TICKER] [--days N]
+govint congress member NAME                                       # committees + trading summary
+govint congress flags [--days 120] [--contracts] [--min-score 2]  # ranked: committee overlap, late filing,
+                                                                  #   size, contract spikes vs. the company's norm
+govint leaks "Apple Inc" "Dexcom" [--days 90] [--all] [--new]     # FDA filings that reveal products
+govint sky now "1600 Pennsylvania Ave NW, Washington DC" [-r 25] [--feed http://pi:8080/data/aircraft.json] [--all]
+govint sky watch --owner "ACME AVIATION LLC" [--tail N123AB] [--interval 120] [--once]
 ```
+
+### Notes on the phase-2 commands
+
+- **congress**: covers the House only. The Senate's eFD site puts its data behind a click-through agreement, so it isn't scraped. 2025–2026 is about 11k trades and syncs in roughly 4 minutes. Paper filings (scanned images) are counted and skipped. Committee overlap is matched by SEC industry code (SIC), so treat it as a lead and check the linked PTR before concluding anything.
+- **leaks**: `--new` remembers what it has already shown, so `govint leaks --new "Apple Inc"` works in cron. The FCC equipment-authorization site blocks scripted access, so `--fcc-grantee BCG` only prints links to open in a browser.
+- **sky**: needs the FAA registry synced to name owners. Anonymous OpenSky requests are rate-limited, so keep `watch --interval` at 60s or more, or point `--feed` at a local dump1090/readsb receiver.
 
 `--json` before any command gives machine-readable output. `--no-cache` bypasses the 24h HTTP cache.
 

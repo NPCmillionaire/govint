@@ -256,3 +256,21 @@ def test_leaks_new_only_and_routine_filter(ctx):
     assert [(i.id, i.signal) for i in items] == [("P1S2", False), ("K261111", True)]
     assert len(leaks.only_new(ctx, items)) == 2
     assert leaks.only_new(ctx, items) == []
+
+
+def test_sky_annotate_joins_faa_and_flags(ctx, tmp_path):
+    from govint.sources import sky
+    faa.load_zip(ctx, _faa_zip(tmp_path))
+    planes = [sky.Plane("A0B1C2", "N123AB", 38.9, -77.0, 41000, 450, 90, "1200", False),
+              sky.Plane("ABCDEF", "DAL850", 38.9, -77.0, 3000, 200, 90, "7700", False)]
+    sky.annotate(ctx, planes)
+    assert planes[0].tail == "N123AB" and planes[0].owner == "ACME AVIATION LLC"
+    assert planes[0].flags == ["corporate"]
+    assert planes[1].reg is None and planes[1].flags == ["squawk 7700 (emergency)"]
+
+
+def test_sky_bbox_and_distance():
+    from govint.sources import sky
+    lamin, lomin, lamax, lomax = sky.bbox(38.9, -77.0, 50)
+    assert lamin < 38.9 < lamax and lomin < -77.0 < lomax
+    assert 40 < sky.distance_km(38.9, -77.0, 38.9 + 50 / 111, -77.0) < 60

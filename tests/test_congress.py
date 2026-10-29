@@ -46,3 +46,18 @@ def test_find_member_by_state_district():
     }
     assert congress.find_member(ms, "Jane Doe", "MD06").bioguide == "A"
     assert congress.find_member(ms, "Nobody Here", "TX01") is None
+
+
+def test_committee_mapping_avoids_false_overlaps():
+    assert congress.committee_sectors("House Committee on Small Business: Contracting and Infrastructure") == []
+    assert "intel-tech" not in congress.committee_sectors("House Committee on Armed Services")
+    assert "transport" in congress.committee_sectors("House Committee on Transportation and Infrastructure")
+
+
+def test_contract_spike_vs_prior_year():
+    from datetime import date
+    monthly = {(2025, m): 1e6 for m in range(1, 13)}
+    monthly.update({(2026, m): 1e6 for m in range(1, 13)})
+    monthly[(2026, 3)] = 50e6
+    window, norm = congress.contract_spike(monthly, date(2026, 3, 10))
+    assert window == 51e6 and norm == 2e6

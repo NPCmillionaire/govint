@@ -301,18 +301,23 @@ SECTORS: dict[str, list[tuple[int, int]]] = {
     "resources": [(1000, 1099), (1400, 1499), (2400, 2499)],
 }
 COMMITTEE_SECTORS = [
-    (r"Armed Services|Defense|Intelligence", ["defense", "intel-tech"]),
+    (r"Armed Services|Subcommittee on Defense|: Defense$|Tactical Air|Seapower|Strategic Forces", ["defense"]),
+    (r"Intelligence|Cybersecurity", ["defense", "intel-tech"]),
     (r"Homeland Security", ["defense", "intel-tech"]),
-    (r"Health|Labor and Pensions|Aging|Veterans", ["health"]),
+    (r"Health|Labor, and Pensions|Aging|Veterans", ["health"]),
     (r"Energy and Commerce", ["health", "energy", "telecom", "intel-tech"]),
     (r"Financial Services|Banking|Housing", ["finance"]),
-    (r"Ways and Means|^Senate Committee on Finance|Committee on Finance", ["health", "finance"]),
+    (r"Ways and Means|Committee on Finance", ["health", "finance"]),
     (r"Agriculture|Nutrition|Forestry", ["agriculture"]),
-    (r"Energy and Natural Resources|Natural Resources|Environment and Public Works", ["energy", "resources"]),
-    (r"Transportation|Infrastructure|Aviation|Railroads|Maritime|Commerce, Science", ["transport", "telecom"]),
-    (r"Science, Space|Communications|Technology", ["intel-tech", "telecom"]),
+    (r"Energy and Natural Resources|Committee on Natural Resources|Environment and Public Works", ["energy", "resources"]),
+    (r"Transportation and Infrastructure|Aviation|Railroads|Maritime|Commerce, Science", ["transport", "telecom"]),
+    (r"Science, Space, and Technology|Communications and Technology", ["intel-tech", "telecom"]),
     (r"Foreign Affairs|Foreign Relations", ["defense"]),
 ]
+
+
+# Sectors where federal contracts are big enough to matter for a trade.
+CONTRACT_SECTORS = {"defense", "intel-tech", "health", "transport", "telecom", "energy"}
 
 
 def committee_sectors(committee_name: str) -> list[str]:
@@ -348,36 +353,81 @@ def ticker_map(ctx: Ctx) -> dict[str, dict]:
     return {v["ticker"].upper(): {"cik": v["cik_str"], "name": v["title"]} for v in data.values()}
 
 
-def contracts_near(ctx: Ctx, company: str, day: str, before: int = 30, after: int = 30) -> list[dict]:
-    """Federal contract obligations to a company in a window around a date."""
+def monthly_contracts(ctx: Ctx, company: str, start: date, end: date) -> dict[tuple[int, int], float]:
+    """Federal contract obligations to a company by calendar month."""
     from . import usaspending
 
-    d = date.fromisoformat(day)
-    body = {
-        "filters": {
-            "recipient_search_text": [company],
-            "award_type_codes": usaspending.CONTRACTS,
-            "time_period": [{"start_date": (d - timedelta(days=before)).isoformat(),
-                             "end_date": (d + timedelta(days=after)).isoformat()}],
-        },
-        "fields": ["Action Date", "Transaction Amount", "Award ID", "Recipient Name", "Awarding Agency",
-                   "Awarding Sub Agency", "Transaction Description", "generated_internal_id"],
-        "limit": 50, "sort": "Transaction Amount", "order": "desc",
-    }
-    data = ctx.http.post(f"{usaspending.API}/search/spending_by_transaction/", body, ttl=7 * 86400)
-    return [r for r in data.get("results", []) if usaspending._same_family(company, r.get("Recipient Name") or "")]
+    body = {"group": "month", "filters": {
+        "recipient_search_text": [company], "award_type_codes": usaspending.CONTRACTS,
+        "time_period": [{"start_date": start.isoformat(), "end_date": end.isoformat()}]}}
+    data = ctx.http.post(f"{usaspending.API}/search/spending_over_time/", body, ttl=7 * 86400)
+    out: dict[tuple[int, int], float] = {}
+    for r in data.get("results", []):
+        fy, fm = int(r["time_period"]["fiscal_year"]), int(r["time_period"]["month"])
+        month = (fm + 8) % 12 + 1  # fiscal month 1 = October
+        year = fy - 1 if fm <= 3 else fy
+        out[(year, month)] = r.get("Contract_Obligations") or r.get("aggregated_amount") or 0.0
+    return out
+
+
+def _add_months(y: int, m: int, k: int) -> tuple[int, int]:
+    i = y * 12 + (m - 1) + k
+    return i // 12, i % 12 + 1
+
+
+def contract_spike(monthly: dict[tuple[int, int], float], day: date) -> tuple[float, float]:
+    """(obligations in the trade month + next, median of the prior twelve 2-month windows)."""
+    from statistics import median
+
+    def two(y: int, m: int) -> float:
+        return monthly.get((y, m), 0.0) + monthly.get(_add_months(y, m, 1), 0.0)
+
+    window = two(day.year, day.month)
+    prior = [two(*_add_months(day.year, day.month, -k)) for k in range(2, 14)]
+    return window, median(prior)
 
 
 def flag_trades(ctx: Ctx, rows: list[dict], with_contracts: bool = False,
                 contract_min: float = 10_000_000, progress=lambda m: None) -> list[Flagged]:
     from . import edgar
 
+    from concurrent.futures import ThreadPoolExecutor
+
     ms = members(ctx)
     tmap = ticker_map(ctx)
-    sic_cache: dict[int, tuple[int | None, str | None]] = {}
     member_cache: dict[tuple[str, str], Member | None] = {}
+
+    # Prefetch industry codes and contract history in parallel; the loop below is offline.
+    ciks = {tmap[t["ticker"].upper()]["cik"] for t in rows if t["ticker"] and t["ticker"].upper() in tmap}
+
+    def sic_of(cik: int) -> tuple[int, tuple[int | None, str | None]]:
+        try:
+            sub = edgar.submissions(ctx, cik, ttl=30 * 86400)
+            return cik, (int(sub["sic"]) if sub.get("sic") else None, sub.get("sicDescription"))
+        except (SourceError, ValueError):
+            return cik, (None, None)
+
+    progress(f"industry codes for {len(ciks)} companies")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        sic_cache = dict(pool.map(sic_of, ciks))
+
+    contract_cache: dict[str, dict] = {}
+    if with_contracts and rows:
+        d0 = min(date.fromisoformat(r["date"]) for r in rows) - timedelta(days=400)
+        wanted = {info["name"] for t in rows if (info := tmap.get((t["ticker"] or "").upper()))
+                  and CONTRACT_SECTORS & set(sic_sectors(sic_cache.get(info["cik"], (None, None))[0]))}
+        progress(f"contract history for {len(wanted)} companies")
+
+        def hist(company: str) -> tuple[str, dict]:
+            try:
+                return company, monthly_contracts(ctx, company, d0, date.today())
+            except SourceError:
+                return company, {}
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            contract_cache = dict(pool.map(hist, wanted))
     out = []
-    for i, t in enumerate(rows):
+    for t in rows:
         reasons: list[str] = []
         score = 0
         key = (t["member"], t["state_dst"])
@@ -386,10 +436,14 @@ def flag_trades(ctx: Ctx, rows: list[dict], with_contracts: bool = False,
         mem = member_cache[key]
 
         # Late filing (STOCK Act: 45 days).
-        lag = (date.fromisoformat(t["filed"]) - date.fromisoformat(t["date"])).days
-        if lag > STOCK_ACT_DAYS:
+        traded = date.fromisoformat(t["date"])
+        lag = (date.fromisoformat(t["filed"]) - traded).days
+        typo = lag < 0 or abs((date.fromisoformat(t["notified"]) - traded).days) > 730
+        if typo:
+            reasons.append("trade date looks mistyped in the filing")
+        elif lag > STOCK_ACT_DAYS:
             reasons.append(f"filed {lag} days after the trade (limit {STOCK_ACT_DAYS})")
-            score += 2
+            score += 1 if lag <= 60 else 2 if lag <= 180 else 3
         if t["amount_min"] >= 250_001:
             reasons.append(f"large: {t['amount']}")
             score += 1
@@ -399,13 +453,7 @@ def flag_trades(ctx: Ctx, rows: list[dict], with_contracts: bool = False,
         if info:
             company = info["name"]
             cik = info["cik"]
-            if cik not in sic_cache:
-                try:
-                    sub = edgar.submissions(ctx, cik)
-                    sic_cache[cik] = (int(sub["sic"]) if sub.get("sic") else None, sub.get("sicDescription"))
-                except (SourceError, ValueError):
-                    sic_cache[cik] = (None, None)
-            sic, sic_label = sic_cache[cik]
+            sic, sic_label = sic_cache.get(cik, (None, None))
             secs = set(sic_sectors(sic))
             if mem and secs:
                 hits = [c for c in mem.committees if secs & set(committee_sectors(c["name"]))]
@@ -416,16 +464,13 @@ def flag_trades(ctx: Ctx, rows: list[dict], with_contracts: bool = False,
                     score += 3 if top.get("title") else 2
 
         flagged = Flagged(t, mem, company, sic_label, reasons, score)
-        if with_contracts and company and t["type"] in ("purchase", "sale", "partial sale"):
-            progress(f"contracts {i + 1}/{len(rows)}: {company}")
-            try:
-                cs = contracts_near(ctx, company, t["date"])
-            except SourceError:
-                cs = []
-            total = sum(c.get("Transaction Amount") or 0 for c in cs)
-            if total >= contract_min:
-                flagged.contracts = cs
-                flagged.reasons.append(f"${total:,.0f} in federal contract actions within 30 days of the trade")
+        if company in contract_cache:
+            window, norm = contract_spike(contract_cache[company], traded)
+            if window >= contract_min and window >= 2 * max(norm, 1.0):
+                ratio = f"{window / norm:.1f}x" if norm > 0 else "far above"
+                flagged.contracts = [{"window_usd": window, "baseline_usd": norm}]
+                flagged.reasons.append(f"${window:,.0f} in federal contracts in the trade month + next, "
+                                       f"{ratio} the company's prior-year norm")
                 flagged.score += 3
         out.append(flagged)
     out.sort(key=lambda f: f.trade["date"], reverse=True)

@@ -39,8 +39,8 @@ def search(ctx: Ctx, query: str) -> list[dict]:
     return sorted(out, key=lambda x: -x["score"])
 
 
-def submissions(ctx: Ctx, cik: int) -> dict:
-    return ctx.http.get(SUBMISSIONS.format(cik=cik), ttl=6 * 3600)
+def submissions(ctx: Ctx, cik: int, ttl: float = 6 * 3600) -> dict:
+    return ctx.http.get(SUBMISSIONS.format(cik=cik), ttl=ttl)
 
 
 def _addr_text(a: dict) -> str | None:

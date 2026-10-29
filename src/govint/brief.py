@@ -119,6 +119,21 @@ def render(g: Graph, seed: Node) -> str:
                      f"{_usd(e.props.get('sold_usd')) if e.props.get('sold_usd') else ''} |")
         L.append("")
 
+    # Congress
+    ctrades = [(e, g.nodes[e.src]) for e in g.edges.values()
+               if e.rel.startswith("congress_trade:") and e.dst in id_set]
+    if ctrades:
+        L.append("## Congressional trades (House PTRs)")
+        L.append("| Member | Trade date | Filed | Type | Amount | Owner |")
+        L.append("|---|---|---|---|---|---|")
+        for e, m in sorted(ctrades, key=lambda x: x[0].props["date"], reverse=True)[:25]:
+            p = e.props
+            L.append(f"| [{m.label}]({e.source.get('url', '')}) | {p['date']} | {p['filed']} | {p['type']} | "
+                     f"{p['amount']} | {p['owner']} |")
+        if len(ctrades) > 25:
+            L.append(f"\n_{len(ctrades) - 25} more; run `govint congress trades --ticker <TICKER>`._")
+        L.append("")
+
     # Money
     awards = [(e, g.nodes[e.src]) for e in g.edges.values() if e.rel == "paid_to" and e.dst in id_set]
     totals = [n.props.get("federal_total_usd") for n in ids if n.props.get("federal_total_usd")]

@@ -459,6 +459,8 @@ def _tree(g: Graph, seed: Node) -> Tree:
                 continue
             groups.setdefault(e.rel, []).append((e, n))
         for rel, items in sorted(groups.items()):
+            if rel.startswith("congress_trade:"):
+                continue
             rb = branch.add(f"[cyan]{rel}[/] ({len(items)})")
             for e, n in items[:15]:
                 seen.add(n.id)
@@ -618,6 +620,7 @@ def congress_flags(
     ticker: Optional[str] = typer.Option(None, "--ticker", "-t"),
     contracts: bool = typer.Option(False, "--contracts", help="Also check federal contracts near each trade (slower)."),
     min_score: int = typer.Option(2, help="Hide trades scoring below this."),
+    per_member: int = typer.Option(3, help="Max rows per member (0 = no cap)."),
     limit: int = typer.Option(40),
 ):
     """Rank trades by committee overlap, late filing, size, and nearby federal contracts."""
@@ -633,7 +636,17 @@ def congress_flags(
                                            progress=lambda m: st.update(f"[dim]{m}[/]"))
         except SourceError as e:
             die(str(e))
-    flagged = [f for f in flagged if f.score >= min_score][:limit]
+    flagged = [f for f in flagged if f.score >= min_score]
+    if per_member:
+        from collections import Counter
+        seen: Counter = Counter()
+        capped = []
+        for f in flagged:
+            seen[f.trade["member"]] += 1
+            if seen[f.trade["member"]] <= per_member:
+                capped.append(f)
+        flagged = capped
+    flagged = flagged[:limit]
     if STATE["json"]:
         return emit_json([{"score": f.score, "reasons": f.reasons, "company": f.company, "sic": f.sic,
                            "member": f.member.name if f.member else None, "trade": f.trade,
@@ -698,3 +711,107 @@ def leaks(
         out.print(f"FCC (open in a browser; the FCC blocks scripted access): {link}")
     for n in notes:
         err.print(f"[yellow]note:[/] {n}")
+
+
+# ---------------------------------------------------------------- sky
+
+sky_app = typer.Typer(help="Live aircraft joined to the FAA registry.", no_args_is_help=True)
+app.add_typer(sky_app, name="sky")
+
+
+def _planes(c, where: Optional[str], radius: float, feed: Optional[str]):
+    from .sources import sky
+    center = sky.place(c, where) if where else None
+    if feed:
+        planes = sky.local_feed(c, feed)
+    elif center:
+        planes = sky.opensky(c, sky.bbox(*center, radius))
+    else:
+        die("give a place (address or 'lat,lon') or --feed URL")
+    if center:
+        for p in planes:
+            p.dist = sky.distance_km(center[0], center[1], p.lat, p.lon) if p.lat is not None else None
+        planes = [p for p in planes if p.dist is None or p.dist <= radius]
+    return planes
+
+
+@sky_app.command("now")
+def sky_now(
+    where: Optional[str] = typer.Argument(None, help="US street address or 'lat,lon'."),
+    radius: float = typer.Option(25.0, "--radius", "-r", help="km"),
+    feed: Optional[str] = typer.Option(None, "--feed", help="dump1090/readsb aircraft.json URL instead of OpenSky."),
+    show_all: bool = typer.Option(False, "--all", help="Show every aircraft, not just flagged ones."),
+):
+    """Who's overhead: registered owner of every aircraft in range."""
+    from .sources import faa as faa_src
+    from .sources import sky
+    c = ctx()
+    try:
+        planes = sky.annotate(c, _planes(c, where, radius, feed))
+    except SourceError as e:
+        die(str(e))
+    if not faa_src.available(c):
+        err.print("[yellow]FAA registry not synced, so owners are unknown. Run: govint sync faa --file <zip>[/]")
+    shown = planes if show_all else [p for p in planes if p.flags]
+    shown.sort(key=lambda p: (not p.flags, getattr(p, "dist", 0) or 0))
+    if STATE["json"]:
+        return emit_json([{**{k: v for k, v in p.__dict__.items() if k != "reg"}, "tail": p.tail, "owner": p.owner,
+                           "model": p.model, "registry": p.reg} for p in shown])
+    t = Table(title=f"{len(planes)} aircraft in range, {len(shown)} shown" + ("" if show_all else " (flagged only; --all for everything)"))
+    for col in ("Hex", "Callsign", "Tail", "Aircraft", "Owner", "Alt ft", "kt", "km", "Flags"):
+        t.add_column(col, overflow="fold")
+    for p in shown:
+        d = getattr(p, "dist", None)
+        t.add_row(p.hex, p.callsign, p.tail, p.model, p.owner, "ground" if p.on_ground else str(p.alt_ft or ""),
+                  str(p.speed_kt or ""), f"{d:.0f}" if d is not None else "", f"[red]{', '.join(p.flags)}[/]" if p.flags else "")
+    out.print(t)
+
+
+@sky_app.command("watch")
+def sky_watch(
+    owner: list[str] = typer.Option(None, "--owner", "-o", help="Registered owner to watch (repeatable)."),
+    tail: list[str] = typer.Option(None, "--tail", help="N-number or hex to watch (repeatable)."),
+    interval: int = typer.Option(120, help="Seconds between checks (OpenSky anonymous limits are tight)."),
+    once: bool = typer.Option(False, "--once", help="Check once and exit (for cron)."),
+):
+    """Alert when a watched owner's aircraft is airborne."""
+    import time
+
+    from .sources import faa as faa_src
+    from .sources import sky
+    c = ctx()
+    if not faa_src.available(c):
+        die("FAA registry not synced. Run: govint sync faa --file <zip>")
+    fleet: dict[str, dict] = {}
+    for o in owner or []:
+        for r in sky.owner_hexes(c, o):
+            fleet[r["mode_s_hex"].upper()] = r
+    for tl in tail or []:
+        for r in faa_src.lookup(c, tl):
+            if r.get("mode_s_hex"):
+                fleet[r["mode_s_hex"].upper()] = r
+    if not fleet:
+        die("no aircraft with Mode S codes match those owners/tails")
+    err.print(f"watching {len(fleet)} aircraft: " + ", ".join(f"{r['n_number']} ({r['name']})" for r in list(fleet.values())[:10]))
+    airborne: set[str] = set()
+    while True:
+        try:
+            planes = sky.opensky(c, icao24=list(fleet))
+        except SourceError as e:
+            err.print(f"[yellow]{e}[/]")
+            planes = []
+        now = {p.hex for p in planes if not p.on_ground}
+        for p in planes:
+            if p.hex in now and p.hex not in airborne:
+                r = fleet[p.hex]
+                out.print(f"[green]AIRBORNE[/] {r['n_number']} ({r['name']}) callsign {p.callsign or '-'} at "
+                          f"{p.lat:.3f},{p.lon:.3f} {p.alt_ft or '?'} ft heading {p.heading}°  "
+                          f"https://globe.adsbexchange.com/?icao={p.hex.lower()}")
+        for h in airborne - now:
+            out.print(f"[dim]LANDED/LOST[/] {fleet[h]['n_number']} ({fleet[h]['name']})")
+        airborne = now
+        if once:
+            if not now:
+                out.print("none airborne")
+            return
+        time.sleep(interval)
