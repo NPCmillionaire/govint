@@ -30,6 +30,7 @@ class Settings:
     sam_key: str | None  # SAM.gov key; SAM is skipped without it
     data_dir: Path
     mirror: str = DEFAULT_MIRROR  # GitHub releases base for prebuilt datasets
+    ntfy: str | None = None  # ntfy topic (or full URL) for watch alerts
 
     @property
     def user_agent(self) -> str:
@@ -64,6 +65,7 @@ def load() -> Settings:
         sam_key=pick("GOVINT_SAM_KEY", "sam_key"),
         data_dir=data_dir,
         mirror=pick("GOVINT_MIRROR", "mirror") or DEFAULT_MIRROR,
+        ntfy=pick("GOVINT_NTFY", "ntfy"),
     )
 
 

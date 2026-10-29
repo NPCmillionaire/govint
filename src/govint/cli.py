@@ -66,6 +66,7 @@ def main_opts(
 
 
 CONFIG_KEYS = {"mirror": "Base URL for prebuilt dataset mirrors (GitHub releases)",
+               "ntfy": "ntfy topic or URL for `govint watch run` alerts (https://ntfy.sh)",
                "contact": "Email for the SEC User-Agent (required by SEC)",
                "data_gov_key": "api.data.gov key for FEC (https://api.data.gov/signup/)",
                "sam_key": "SAM.gov API key (sam.gov > Account Details)"}
@@ -865,3 +866,84 @@ def sky_watch(
                 out.print("none airborne")
             return
         time.sleep(interval)
+
+
+# ---------------------------------------------------------------- watch
+
+watch_app = typer.Typer(help="Watchlist: alert on new filings, contracts, trades, listings, flights.",
+                        no_args_is_help=True)
+app.add_typer(watch_app, name="watch")
+
+
+@watch_app.command("add")
+def watch_add(
+    kind: str = typer.Argument(..., help="company, ticker, tail, owner, or keyword"),
+    value: str = typer.Argument(...),
+):
+    """Add something to watch. Its first check records a silent baseline."""
+    from . import watch as w
+    try:
+        it = w.add(ctx(), kind, value)
+    except ValueError as e:
+        die(str(e))
+    out.print(f"watching #{it.id}: {it.kind} {it.value}")
+
+
+@watch_app.command("ls")
+def watch_ls():
+    """List watched items."""
+    from . import watch as w
+    its = w.items(ctx())
+    if STATE["json"]:
+        return emit_json([i.__dict__ for i in its])
+    if not its:
+        out.print("Watchlist is empty. Try: govint watch add company \"Palantir Technologies\"")
+        return
+    t = Table()
+    for col in ("#", "Kind", "Value", "Resolved as", "Baselined"):
+        t.add_column(col)
+    for i in its:
+        t.add_row(str(i.id), i.kind, i.value, i.label if i.label != i.value else "", "yes" if i.baselined else "not yet")
+    out.print(t)
+
+
+@watch_app.command("rm")
+def watch_rm(item_id: int):
+    """Remove a watched item by number."""
+    from . import watch as w
+    if not w.remove(ctx(), item_id):
+        die(f"no watch item #{item_id}")
+    out.print(f"removed #{item_id}")
+
+
+@watch_app.command("run")
+def watch_run(
+    notify: bool = typer.Option(True, "--notify/--no-notify", help="Send to the configured ntfy topic."),
+    loop: Optional[int] = typer.Option(None, "--every", help="Repeat every N minutes instead of exiting."),
+):
+    """Check everything once (cron/systemd) or on a loop; print and push what's new."""
+    import time
+
+    from . import watch as w
+    c = ctx()
+    if not w.items(c):
+        die("watchlist is empty; add something with `govint watch add`")
+    while True:
+        events, errors = w.run(c, log=lambda m: err.print(f"[dim]{m}[/]"))
+        for e in events:
+            out.print(f"[b]{e.source}[/] {e.title}" + (f"  {e.url}" if e.url else ""))
+            if notify and c.settings.ntfy:
+                try:
+                    w.notify_ntfy(c, c.settings.ntfy, e)
+                except Exception as ex:
+                    err.print(f"[yellow]ntfy failed: {ex}[/]")
+        for x in errors:
+            err.print(f"[yellow]{x}[/]")
+        if STATE["json"]:
+            emit_json([{"source": e.source, "title": e.title, "url": e.url, "when": e.when,
+                        "item": e.item.value} for e in events])
+        elif not events:
+            err.print("[dim]nothing new[/]")
+        if not loop:
+            return
+        time.sleep(loop * 60)

@@ -1,0 +1,10 @@
+[Unit]
+Description=govint watchlist check
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Set these in `systemctl --user edit govint-watch` or ~/.config/govint/config.toml instead.
+# Environment=GOVINT_NTFY=your-secret-topic
+ExecStart=%h/.local/bin/govint watch run
