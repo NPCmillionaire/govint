@@ -233,3 +233,26 @@ def test_shared_first_name_or_single_word_alias_is_not_a_match():
 
 def test_international_subsidiary_is_not_the_parent():
     assert names.score("Lockheed Martin", "LOCKHEED MARTIN INTERNATIONAL SA") < 100
+
+
+@respx.mock
+def test_leaks_new_only_and_routine_filter(ctx):
+    from govint.sources import leaks
+    respx.get(url__startswith="https://api.fda.gov/device/510k.json").mock(return_value=httpx.Response(200, json={
+        "meta": {"results": {"total": 1}},
+        "results": [{"k_number": "K261111", "decision_date": "2026-09-01", "device_name": "Widget Sensor",
+                     "applicant": "Acme Inc.", "decision_description": "Substantially Equivalent",
+                     "product_code": "ABC", "date_received": "2026-05-01"}]}))
+    respx.get(url__startswith="https://api.fda.gov/device/pma.json").mock(return_value=httpx.Response(200, json={
+        "meta": {"results": {"total": 1}},
+        "results": [{"pma_number": "P1", "supplement_number": "S2", "decision_date": "2026-09-02", "applicant": "ACME INC",
+                     "trade_name": "Thing", "supplement_type": "30-Day Notice"}]}))
+    respx.get(url__startswith="https://api.fda.gov/device/registrationlisting.json").mock(
+        return_value=httpx.Response(404, json={"error": {"code": "NOT_FOUND"}}))
+    respx.get(url__startswith="https://api.fda.gov/drug/drugsfda.json").mock(
+        return_value=httpx.Response(404, json={"error": {"code": "NOT_FOUND"}}))
+    items, notes = leaks.scan(ctx, "Acme", days=36500)
+    assert notes == []
+    assert [(i.id, i.signal) for i in items] == [("P1S2", False), ("K261111", True)]
+    assert len(leaks.only_new(ctx, items)) == 2
+    assert leaks.only_new(ctx, items) == []

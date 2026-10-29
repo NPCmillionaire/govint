@@ -14,7 +14,8 @@ from urllib.parse import urlparse
 import httpx
 
 # Minimum seconds between requests to a host. SEC allows 10 req/s.
-HOST_SPACING = {"www.sec.gov": 0.12, "data.sec.gov": 0.12, "efts.sec.gov": 0.12}
+HOST_SPACING = {"www.sec.gov": 0.12, "data.sec.gov": 0.12, "efts.sec.gov": 0.12,
+                "disclosures-clerk.house.gov": 0.25}
 DEFAULT_TTL = 24 * 3600
 
 

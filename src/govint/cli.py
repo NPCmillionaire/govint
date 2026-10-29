@@ -521,3 +521,180 @@ def brief_cmd(
 
 def main() -> None:
     app()
+
+
+# ---------------------------------------------------------------- congress
+
+congress_app = typer.Typer(help="Congressional stock trades vs. committee seats and federal contracts.",
+                           no_args_is_help=True)
+app.add_typer(congress_app, name="congress")
+
+
+def _since(days: int | None) -> str | None:
+    from datetime import date, timedelta
+    return (date.today() - timedelta(days=days)).isoformat() if days else None
+
+
+@congress_app.command("sync")
+def congress_sync(years: list[int] = typer.Argument(None, help="Years to sync (default: this year and last).")):
+    """Download and parse House periodic transaction reports (PTRs)."""
+    from datetime import date
+    from rich.progress import Progress
+
+    from .sources import congress
+    c = ctx()
+    years = years or [date.today().year - 1, date.today().year]
+    for y in years:
+        with Progress(console=err, transient=True) as prog:
+            task = prog.add_task(f"House PTRs {y}", total=None)
+            try:
+                stats = congress.sync_house(c, y, lambda d, t: prog.update(task, completed=d, total=t))
+            except SourceError as e:
+                die(str(e))
+        out.print(f"{y}: {stats['filings']} PTR filings, {stats['new']} new, {stats['trades']} trades parsed, "
+                  f"{stats['scanned']} scanned paper filings skipped, {stats['errors']} errors")
+
+
+@congress_app.command("trades")
+def congress_trades(
+    member: Optional[str] = typer.Option(None, "--member", "-m"),
+    ticker: Optional[str] = typer.Option(None, "--ticker", "-t"),
+    days: Optional[int] = typer.Option(None, "--days", help="Only trades in the last N days."),
+    limit: int = typer.Option(50),
+):
+    """List disclosed trades."""
+    from .sources import congress
+    c = ctx()
+    if not congress.available(c):
+        die("no trades synced. Run: govint congress sync")
+    rows = congress.trades(c, member, ticker, _since(days), limit)
+    if STATE["json"]:
+        return emit_json(rows)
+    t = Table(title="Congressional trades (House PTRs)")
+    for col in ("Trade date", "Filed", "Member", "Owner", "Type", "Ticker", "Asset", "Amount"):
+        t.add_column(col, overflow="fold")
+    for r in rows:
+        t.add_row(r["date"], r["filed"], f"{r['member']} ({r['state_dst']})", r["owner"], r["type"],
+                  r["ticker"] or "", r["asset"][:50], r["amount"])
+    out.print(t)
+
+
+@congress_app.command("member")
+def congress_member(name: str):
+    """A member's committees and disclosed trading."""
+    from collections import Counter
+
+    from .sources import congress
+    c = ctx()
+    ms = congress.members(c)
+    rows = congress.trades(c, member=name, limit=10_000) if congress.available(c) else []
+    m = congress.find_member(ms, name, rows[0]["state_dst"] if rows else None)
+    if not m and not rows:
+        die(f"no member or trades match {name!r}")
+    if STATE["json"]:
+        return emit_json({"member": m.__dict__ if m else None, "trades": rows})
+    if m:
+        out.print(f"[b]{m.name}[/] ({m.party}, {m.state}{'-' + str(m.district) if m.district else ''}, {m.chamber})")
+        for cm in m.committees:
+            secs = congress.committee_sectors(cm["name"])
+            out.print(f"  {cm['name']}" + (f" [b]{cm['title']}[/]" if cm.get("title") else "")
+                      + (f" [dim]→ {', '.join(secs)}[/]" if secs else ""))
+    if rows:
+        tick = Counter(r["ticker"] for r in rows if r["ticker"])
+        lag = [r for r in rows if (_d(r["filed"]) - _d(r["date"])).days > congress.STOCK_ACT_DAYS]
+        out.print(f"\n{len(rows)} disclosed trades, {len(lag)} filed late. Most traded: "
+                  + ", ".join(f"{k} ({v})" for k, v in tick.most_common(10)))
+
+
+def _d(s: str):
+    from datetime import date
+    return date.fromisoformat(s)
+
+
+@congress_app.command("flags")
+def congress_flags(
+    days: int = typer.Option(120, "--days", help="Trades in the last N days."),
+    member: Optional[str] = typer.Option(None, "--member", "-m"),
+    ticker: Optional[str] = typer.Option(None, "--ticker", "-t"),
+    contracts: bool = typer.Option(False, "--contracts", help="Also check federal contracts near each trade (slower)."),
+    min_score: int = typer.Option(2, help="Hide trades scoring below this."),
+    limit: int = typer.Option(40),
+):
+    """Rank trades by committee overlap, late filing, size, and nearby federal contracts."""
+    from .sources import congress
+    c = ctx()
+    if not congress.available(c):
+        die("no trades synced. Run: govint congress sync")
+    rows = congress.trades(c, member, ticker, _since(days), limit=5000)
+    rows = [r for r in rows if r["ticker"] or not contracts]
+    with err.status("scoring trades…") as st:
+        try:
+            flagged = congress.flag_trades(c, rows, with_contracts=contracts,
+                                           progress=lambda m: st.update(f"[dim]{m}[/]"))
+        except SourceError as e:
+            die(str(e))
+    flagged = [f for f in flagged if f.score >= min_score][:limit]
+    if STATE["json"]:
+        return emit_json([{"score": f.score, "reasons": f.reasons, "company": f.company, "sic": f.sic,
+                           "member": f.member.name if f.member else None, "trade": f.trade,
+                           "contracts": f.contracts} for f in flagged])
+    if not flagged:
+        out.print("Nothing scored above the threshold.")
+        return
+    t = Table(title=f"Flagged congressional trades, last {days} days")
+    for col in ("Score", "Date", "Member", "Trade", "Why"):
+        t.add_column(col, overflow="fold")
+    for f in flagged:
+        tr = f.trade
+        who = f.member.name if f.member else tr["member"]
+        t.add_row(str(f.score), tr["date"], f"{who} ({tr['state_dst']})",
+                  f"{tr['type']} {tr['ticker'] or tr['asset'][:30]} {tr['amount']}" + (" [dim](" + tr["owner"] + ")[/]" if tr["owner"] != "self" else ""),
+                  "\n".join(f.reasons))
+    out.print(t)
+    out.print("[dim]Signals, not accusations: committee overlap is by industry code, and filings are "
+              "self-reported ranges. Check the linked PTR before drawing conclusions.[/]")
+
+
+# ---------------------------------------------------------------- leaks
+
+
+@app.command()
+def leaks(
+    companies: list[str] = typer.Argument(..., help="One or more company names."),
+    days: int = typer.Option(90, "--days", help="Look-back window."),
+    show_all: bool = typer.Option(False, "--all", help="Include routine paperwork (manufacturing notices, labeling)."),
+    new: bool = typer.Option(False, "--new", help="Only items not seen on a previous --new run (for cron)."),
+    fcc_grantee: Optional[str] = typer.Option(None, "--fcc-grantee", help="FCC grantee code, e.g. BCG for Apple."),
+    fcc_id: Optional[str] = typer.Option(None, "--fcc-id", help="Specific FCC ID to open."),
+):
+    """Unreleased-product signals from FDA filings (+ FCC links to open in a browser)."""
+    from .sources import leaks as lk
+    c = ctx()
+    items, notes = [], []
+    with err.status("scanning filings…") as st:
+        for co in companies:
+            st.update(f"[dim]{co}[/]")
+            i, n = lk.scan(c, co, days)
+            items += i
+            notes += n
+    if not show_all:
+        items = [i for i in items if i.signal]
+    if new:
+        items = lk.only_new(c, items)
+    items.sort(key=lambda i: i.date, reverse=True)
+    links = lk.fcc_links(fcc_grantee, fcc_id)
+    if STATE["json"]:
+        return emit_json({"items": [i.__dict__ for i in items], "fcc_links": links, "notes": notes})
+    if items:
+        t = Table(title=f"Regulatory filings, last {days} days" + (" (new only)" if new else ""))
+        for col in ("Date", "Source", "Company", "Product", "Detail", "Link"):
+            t.add_column(col, overflow="fold")
+        for i in items:
+            t.add_row(i.date, i.source, i.company, i.title, i.detail[:90], i.url)
+        out.print(t)
+    else:
+        out.print("No new filings." if new else "No filings in the window.")
+    for link in links:
+        out.print(f"FCC (open in a browser; the FCC blocks scripted access): {link}")
+    for n in notes:
+        err.print(f"[yellow]note:[/] {n}")
