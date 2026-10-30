@@ -14,10 +14,10 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 
 from .http import SourceError
-from .sources import congress, csl, edgar, faa, leaks, sky, usaspending
+from .sources import congress, csl, edgar, faa, leaks, lobby, sky, usaspending
 from .sources.base import Ctx
 
-KINDS = ("company", "ticker", "tail", "owner", "keyword")
+KINDS = ("company", "ticker", "tail", "owner", "keyword", "phrase", "lobbying")
 # High-volume SEC forms that drown out signal.
 SKIP_FORMS = {"424B2", "424B3", "424B5", "FWP", "424B4", "424B7", "S-8 POS", "SC 13G/A", "13F-HR"}
 
@@ -177,6 +177,30 @@ def _keyword(ctx: Ctx, item: Item) -> list[Event]:
     return out
 
 
+def _phrase(ctx: Ctx, item: Item) -> list[Event]:
+    """New SEC filings containing a phrase (full-text search, last 60 days)."""
+    q = item.value if '"' in item.value or " " not in item.value else f'"{item.value}"'
+    since = (date.today() - timedelta(days=60)).isoformat()
+    _total, hits, _top = edgar.fulltext(ctx, q, since=since, ttl=1800)
+    return [Event(item, "SEC full text", f"efts:{h['accession']}",
+                  f"{h['filer']} {h['form']} mentions {q}: {h['file_type']} {h['description']}"[:200],
+                  h["url"], h["filed"]) for h in hits]
+
+
+def _lobbying(ctx: Ctx, item: Item) -> list[Event]:
+    """New lobbying reports (LD-2) naming the company as a client."""
+    out = []
+    for f in lobby.filings(ctx, client=item.value, years=1, max_pages=4):
+        amt = lobby.amount(f)
+        issues = sorted({a.get("general_issue_code_display") or "" for a in f.get("lobbying_activities") or []} - {""})
+        out.append(Event(item, "Lobbying", f"lda:{f['filing_uuid']}",
+                         f"{f['client']['name']} lobbying via {f['registrant']['name']}, "
+                         f"{f['filing_year']} {f['filing_period'].replace('_', ' ')}"
+                         + (f": ${amt:,.0f}" if amt else "") + (f" on {', '.join(issues[:4])}" if issues else ""),
+                         f["filing_document_url"], f["dt_posted"][:10]))
+    return out
+
+
 def _fleet(ctx: Ctx, item: Item) -> dict[str, dict]:
     if not faa.available(ctx):
         return {}
@@ -245,7 +269,8 @@ def run(ctx: Ctx, log: Callable[[str], None] = lambda _: None) -> tuple[list[Eve
     for it in its:
         if it.kind in ("tail", "owner"):
             continue
-        fn = {"company": _company, "ticker": _ticker, "keyword": _keyword}[it.kind]
+        fn = {"company": _company, "ticker": _ticker, "keyword": _keyword, "phrase": _phrase,
+              "lobbying": _lobbying}[it.kind]
         try:
             found.append((it, fn(ctx, it)))
         except SourceError as e:

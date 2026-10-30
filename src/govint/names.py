@@ -115,14 +115,29 @@ def score(a: str, b: str, person: bool = False) -> float:
 _ADDR = {"boulevard": "blvd", "street": "st", "avenue": "ave", "drive": "dr", "road": "rd",
          "suite": "ste", "floor": "fl", "parkway": "pkwy", "highway": "hwy", "lane": "ln",
          "court": "ct", "place": "pl", "north": "n", "south": "s", "east": "e", "west": "w",
-         "us": "", "usa": ""}
+         "us": "", "usa": "", "one": "1", "two": "2", "three": "3"}
+_STATES = {
+    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar", "california": "ca", "colorado": "co",
+    "connecticut": "ct", "delaware": "de", "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
+    "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks", "kentucky": "ky", "louisiana": "la",
+    "maine": "me", "maryland": "md", "massachusetts": "ma", "michigan": "mi", "minnesota": "mn",
+    "mississippi": "ms", "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv", "ohio": "oh",
+    "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa", "tennessee": "tn", "texas": "tx", "utah": "ut",
+    "vermont": "vt", "virginia": "va", "wisconsin": "wi", "wyoming": "wy",
+    "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny", "north carolina": "nc",
+    "north dakota": "nd", "rhode island": "ri", "south carolina": "sc", "south dakota": "sd",
+    "west virginia": "wv", "united states of america": "", "united states": "",
+}
+_STATE_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, _STATES), key=len, reverse=True)) + r")\b")
 
 
 def address_key(text: str) -> str:
     """Stable id for an address so 'Suite 2350, Biscayne Boulevard' == 'STE 2350 BISCAYNE BLVD'."""
     s = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
     s = re.sub(r"\bus-([a-z]{2})\b", r"\1", s)  # GLEIF "US-CO" region codes
+    s = re.sub(r"\b(\d{5})-\d{4}\b", r"\1", s)  # ZIP+4 -> ZIP
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    s = _STATE_RE.sub(lambda m: _STATES[m.group(1)], re.sub(r"\s+", " ", s))
     words = [_ADDR.get(w, w) for w in s.split()]
     words = [w for w in words if w]
     if words and len(words[-1]) == 9 and words[-1].isdigit():  # ZIP+4 -> ZIP

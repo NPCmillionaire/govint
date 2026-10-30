@@ -14,6 +14,9 @@ FLAG_TEXT = {
     "name-churn": "Three or more former names on file with the SEC",
     "listed": "Appears on a screening list",
     "registered-foreign-agent": "Active registration under the Foreign Agents Registration Act",
+    "offshore-leaks": "Name appears in the ICIJ Offshore Leaks database",
+    "offshore-leaks-possible": "Name resembles an entry in the ICIJ Offshore Leaks database; verify",
+    "offshore-leaks-namesake": "Someone with this exact name is in the ICIJ Offshore Leaks database (may be a different person)",
 }
 
 
@@ -32,6 +35,10 @@ def _usd(x) -> str:
 
 
 def _flag_text(f: str) -> str:
+    if f.startswith("revolving-door:"):
+        return f"{f.split(':', 1)[1]} of its lobbyists previously held government jobs (see Lobbying)"
+    if f.startswith("lobbying-foreign-interest:"):
+        return f"Lobbying filings disclose a foreign entity with an interest: {f.split(':', 1)[1]}"
     if f.startswith("foreign-parent:"):
         return f"Parent company is registered outside its home country ({f.split(':', 1)[1]})"
     return FLAG_TEXT.get(f, f)
@@ -56,8 +63,13 @@ def render(g: Graph, seed: Node) -> str:
     flagged = [n for n in g.nodes.values() if n.flags and n.kind != SANCTION]
     L.append("## Flags")
     if flagged:
+        shown: set[str] = set()  # one line per flag across the subject's own identities
         for n in flagged:
             for f in n.flags:
+                if n.id in id_set:
+                    if f in shown:
+                        continue
+                    shown.add(f)
                 L.append(f"- **{_flag_text(f)}**: {_link(n)}")
     else:
         L.append("- None raised by the sources checked.")
@@ -185,6 +197,22 @@ def render(g: Graph, seed: Node) -> str:
                 L.append(f"  - {_usd(e.props['usd'])} → {_link(c)} ({e.props['count']} donations)")
         L.append("")
 
+    # Lobbying
+    firms = [(e, g.nodes[e.dst]) for e in g.edges.values() if e.rel == "pays_lobbyist" and e.src in id_set]
+    ex = [(e, g.nodes[e.src]) for e in g.edges.values() if e.rel == "lobbies_for" and e.dst in id_set]
+    spent = sum(n.props.get("lobbying_last_2y") or 0 for n in ids)
+    if firms or ex or spent:
+        L.append("## Lobbying (LDA)")
+        if spent:
+            L.append(f"- Reported lobbying spend, last two years (in-house plus outside firms): {_usd(spent)}")
+        for e, f in sorted(firms, key=lambda x: -x[0].props.get("amount", 0)):
+            L.append(f"- Pays {_link(f)}: {_usd(e.props.get('amount'))} (latest {e.props.get('last')})")
+        if ex:
+            L.append(f"- Lobbyists who held government jobs ({len(ex)}):")
+            for e, p in ex[:15]:
+                L.append(f"  - {_link(p)} ({p.props.get('firm')}): {e.props.get('former_position')}")
+        L.append("")
+
     # Sanctions
     hits = [(e, g.nodes[e.src], g.nodes[e.dst]) for e in g.edges.values()
             if e.rel == "possible_match" and g.nodes[e.dst].kind == SANCTION]
@@ -198,6 +226,27 @@ def render(g: Graph, seed: Node) -> str:
         L.append(f"- No matches across {screened} screened names." if not any(
             "CSL not synced" in x for x in g.notes) else "- Not screened (CSL not synced).")
     L.append("")
+
+    # Offshore
+    off = [(e, g.nodes[e.src], g.nodes[e.dst]) for e in g.edges.values() if e.rel == "in_offshore_leaks"]
+    if off:
+        L.append("## Offshore Leaks (ICIJ)")
+        seen_x: set[str] = set()
+        for e, who, x in sorted(off, key=lambda t: -(t[0].props.get("score") or 0)):
+            if x.id in seen_x:
+                continue
+            seen_x.add(x.id)
+            p = x.props
+            where = p.get("jurisdiction") or p.get("countries") or "?"
+            L.append(f"- {who.label} ↔ {_link(x)}: {p.get('icij_role')} in {e.props.get('leak')}, {where}; "
+                     f"score {e.props.get('score')}")
+            rel = [e2 for e2 in g.edges.values() if e2.rel.startswith("icij:") and x.id in (e2.src, e2.dst)]
+            for e2 in rel[:10]:
+                other = g.nodes[e2.dst if e2.src == x.id else e2.src]
+                L.append(f"  - {e2.rel[5:].replace('_', ' ')}: {_link(other)}")
+            if len(rel) > 10:
+                L.append(f"  - _{len(rel) - 10} more; run `govint offshore {x.id.rsplit(':', 1)[1]}`_")
+        L.append("")
 
     # Aircraft
     planes = [(e, g.nodes[e.src], g.nodes[e.dst]) for e in g.edges.values() if e.rel == "registered_owner_of"]

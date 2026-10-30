@@ -31,6 +31,7 @@ class Settings:
     data_dir: Path
     mirror: str = DEFAULT_MIRROR  # GitHub releases base for prebuilt datasets
     ntfy: str | None = None  # ntfy topic (or full URL) for watch alerts
+    lda_key: str | None = None  # lda.gov API key: 120 req/min instead of 15
 
     @property
     def user_agent(self) -> str:
@@ -66,6 +67,7 @@ def load() -> Settings:
         data_dir=data_dir,
         mirror=pick("GOVINT_MIRROR", "mirror") or DEFAULT_MIRROR,
         ntfy=pick("GOVINT_NTFY", "ntfy"),
+        lda_key=pick("GOVINT_LDA_KEY", "lda_key"),
     )
 
 

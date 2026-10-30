@@ -8,7 +8,7 @@ from typing import Callable
 from . import names
 from .graph import COMPANY, PERSON, Edge, Graph, Node, Result
 from .http import SourceError
-from .sources import congress, csl, edgar, faa, fara, fec, gleif, sam, usaspending
+from .sources import congress, csl, edgar, faa, fara, fec, gleif, lobby, offshore, sam, usaspending
 from .sources.base import Ctx, cite
 
 Progress = Callable[[str], None]
@@ -72,15 +72,17 @@ def _remote(ctx: Ctx, subject: Node, full: bool) -> list[tuple[str, Callable[[],
             ("USAspending", lambda: usaspending.result(ctx, subject)),
             ("FEC", lambda: fec.result(ctx, subject)),
             ("SAM.gov", lambda: sam.result(ctx, subject)),
+            ("Lobbying", lambda: lobby.result(ctx, subject)),
         ]
     return jobs
 
 
 def _screen_local(ctx: Ctx, g: Graph, nodes: list[Node], progress: Progress) -> None:
-    targets = [n for n in nodes if n.kind in SCREENABLE]
+    targets = [n for n in nodes if n.kind in SCREENABLE and n.props.get("screen", True)]
     if not targets:
         return
     have_csl, have_faa, have_fara = csl.available(ctx), faa.available(ctx), fara.available(ctx)
+    have_icij = offshore.available(ctx)
     progress(f"screening {len(targets)} names locally")
     for n in targets:
         if have_csl:
@@ -89,6 +91,8 @@ def _screen_local(ctx: Ctx, g: Graph, nodes: list[Node], progress: Progress) -> 
             g.merge(_safe("FAA", lambda n=n: faa.owner_result(ctx, n)))
         if have_fara:
             g.merge(_safe("FARA", lambda n=n: fara.result(ctx, n)))
+        if have_icij:
+            g.merge(_safe("ICIJ", lambda n=n: offshore.result(ctx, n)))
 
 
 def pivot(ctx: Ctx, query: str, depth: int = 1, related_budget: int = 6,

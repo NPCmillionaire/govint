@@ -6,6 +6,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import date
 
 from .. import names
 from ..graph import ADDRESS, COMPANY, PERSON, Edge, Node, Result
@@ -207,3 +208,38 @@ def insiders_result(ctx: Ctx, cik: int, company_label: str) -> Result:
             "sold_usd": round(p.sold), "filings": p.filings,
         }, source=src))
     return r
+
+
+FULLTEXT_UI = "https://efts.sec.gov/LATEST/search-index?q={q}"
+
+
+def fulltext(ctx: Ctx, query: str, forms: list[str] | None = None, since: str | None = None,
+             until: str | None = None, pages: int = 1, ttl: float = 6 * 3600) -> tuple[int, list[dict], list[tuple[str, int]]]:
+    """SEC full-text search over filings since 2001. Phrase-quote multiword queries yourself.
+    Returns (total hits, hits, top filers)."""
+    params: dict = {"q": query}
+    if forms:
+        params["forms"] = ",".join(forms)
+    if since or until:
+        params.update(dateRange="custom", startdt=since or "2001-01-01", enddt=until or date.today().isoformat())
+    hits, total, top = [], 0, []
+    for page in range(pages):
+        data = ctx.http.get(SEARCH, params={**params, "from": page * 100}, ttl=ttl)
+        total = data.get("hits", {}).get("total", {}).get("value", 0)
+        if page == 0:
+            for b in data.get("aggregations", {}).get("entity_filter", {}).get("buckets", []):
+                top.append((re.sub(r"\s+\(CIK \d+\)$", "", b["key"]).strip(), b["doc_count"]))
+        batch = data.get("hits", {}).get("hits", [])
+        for h in batch:
+            s = h["_source"]
+            adsh, _, doc = h["_id"].partition(":")
+            cik = int(s["ciks"][0]) if s.get("ciks") else 0
+            hits.append({
+                "filer": re.sub(r"\s+\(CIK \d+\)$", "", (s.get("display_names") or ["?"])[0]).strip(),
+                "cik": cik, "form": s.get("form"), "filed": s.get("file_date"), "file_type": s.get("file_type"),
+                "description": s.get("file_description") or "", "location": ", ".join(s.get("biz_locations") or []),
+                "url": ARCHIVE.format(cik=cik, acc=adsh.replace("-", ""), doc=doc), "accession": adsh,
+            })
+        if len(batch) < 100:
+            break
+    return total, hits, top

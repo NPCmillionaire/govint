@@ -30,7 +30,10 @@ STATE: dict = {"cache": True, "json": False}
 
 def ctx() -> Ctx:
     s = config.load()
-    return Ctx(settings=s, http=Http(s.user_agent, s.cache_path, use_cache=STATE["cache"]))
+    http = Http(s.user_agent, s.cache_path, use_cache=STATE["cache"])
+    # lda.gov allows 15 requests a minute anonymously, 120 with a key.
+    http.spacing["lda.gov"] = 0.5 if s.lda_key else 4.0
+    return Ctx(settings=s, http=http)
 
 
 def die(msg: str) -> None:
@@ -69,7 +72,8 @@ CONFIG_KEYS = {"mirror": "Base URL for prebuilt dataset mirrors (GitHub releases
                "ntfy": "ntfy topic or URL for `govint watch run` alerts (https://ntfy.sh)",
                "contact": "Email for the SEC User-Agent (required by SEC)",
                "data_gov_key": "api.data.gov key for FEC (https://api.data.gov/signup/)",
-               "sam_key": "SAM.gov API key (sam.gov > Account Details)"}
+               "sam_key": "SAM.gov API key (sam.gov > Account Details)",
+               "lda_key": "lda.gov lobbying API key (https://lda.gov/api/register/), raises 15 -> 120 req/min"}
 
 
 @app.command("config")
@@ -100,7 +104,7 @@ def config_cmd(key: Optional[str] = typer.Argument(None), value: Optional[str] =
 
 @app.command()
 def sync(
-    dataset: str = typer.Argument("all", help="csl, faa, fara, or all"),
+    dataset: str = typer.Argument("all", help="csl, faa, fara, offshore, or all"),
     file: Optional[Path] = typer.Option(None, "--file", help="Use an already-downloaded FAA zip."),
 ):
     """Download bulk datasets for offline use (sanctions list, FAA registry, FARA)."""
@@ -131,8 +135,18 @@ def sync(
             except SourceError as e:
                 err.print(f"[red]FARA failed:[/] {e}")
                 failed = True
-    if dataset not in ("csl", "faa", "fara", "all"):
-        die("dataset must be csl, faa, fara, or all")
+    if dataset in ("offshore", "all"):
+        from .sources import offshore
+        with err.status("ICIJ Offshore Leaks…") as st:
+            try:
+                n = offshore.sync(c, progress=lambda m: st.update(f"ICIJ: {m}…"))
+                out.print(f"ICIJ: {n['entity']:,} offshore entities, {n['officer']:,} officers, "
+                          f"{n['intermediary']:,} intermediaries, {n['relationships']:,} links")
+            except SourceError as e:
+                err.print(f"[red]ICIJ failed:[/] {e}")
+                failed = True
+    if dataset not in ("csl", "faa", "fara", "offshore", "all"):
+        die("dataset must be csl, faa, fara, offshore, or all")
     if failed:
         raise typer.Exit(1)
 
@@ -198,9 +212,21 @@ def status():
         t.add_row("FAA registry", f"{n:,} aircraft, data dated {m.get('data_date', '?')} (from {m.get('source', '?')})")
     else:
         t.add_row("FAA registry", "[yellow]not synced[/] (govint sync faa)")
+    from .sources import fara as fara_src, offshore
+    if fara_src.available(c):
+        n = c.db().execute("select count(*) from fara_principals").fetchone()[0]
+        t.add_row("FARA", f"{n:,} foreign principals")
+    else:
+        t.add_row("FARA", "[yellow]not synced[/] (govint sync fara)")
+    if offshore.available(c):
+        t.add_row("ICIJ Offshore Leaks", f"data generated {offshore.meta(c).get('generated', '?')}, "
+                                         f"loaded {_age(offshore.path(c))}")
+    else:
+        t.add_row("ICIJ Offshore Leaks", "[yellow]not synced[/] (govint sync offshore)")
     t.add_row("SEC contact", s.contact or "[red]unset[/] (govint config contact you@example.com)")
     t.add_row("FEC key", "DEMO_KEY" if s.data_gov_key == "DEMO_KEY" else "set")
     t.add_row("SAM key", "set" if s.sam_key else "[yellow]unset[/]")
+    t.add_row("LDA key", "set" if s.lda_key else "unset (lobbying limited to 15 req/min)")
     out.print(t)
 
 
@@ -887,7 +913,7 @@ app.add_typer(watch_app, name="watch")
 
 @watch_app.command("add")
 def watch_add(
-    kind: str = typer.Argument(..., help="company, ticker, tail, owner, or keyword"),
+    kind: str = typer.Argument(..., help="company, ticker, tail, owner, keyword (sanctions), phrase (SEC full text), or lobbying"),
     value: str = typer.Argument(...),
 ):
     """Add something to watch. Its first check records a silent baseline."""
@@ -1069,5 +1095,196 @@ def near(
     if rep.quakes:
         out.print("\n[b]Strongest earthquakes within 100 km, last 10 years:[/] " + "; ".join(
             f"M{q['mag']} {q['when']} ({q['place']})" for q in rep.quakes[:3]))
+    for n in rep.notes:
+        err.print(f"[yellow]note:[/] {n}")
+
+
+# ---------------------------------------------------------------- lobbying, offshore, full text, shells
+
+
+@app.command()
+def lobby(
+    name: str = typer.Argument(..., help="Client company, or a lobbying firm with --firm."),
+    firm: bool = typer.Option(False, "--firm", help="Treat NAME as a lobbying firm and list its clients."),
+    years: int = typer.Option(2, help="Years back, counting this one."),
+):
+    """Federal lobbying: spend, firms, issues, agencies, and ex-officials lobbying (LDA)."""
+    from .sources import lobby as lb
+    c = ctx()
+    with err.status("querying lda.gov…"):
+        try:
+            fs = lb.filings(c, client=None if firm else name, firm=name if firm else None, years=years,
+                            max_pages=40 if firm else 12)
+        except SourceError as e:
+            die(str(e))
+    s = lb.summarize(name, fs, firm_view=firm)
+    if STATE["json"]:
+        import dataclasses
+        return emit_json(dataclasses.asdict(s))
+    if not fs:
+        out.print(f"No lobbying reports for {name!r} in the last {years} years.")
+        return
+    out.print(f"[b]{name}[/]: {s.filings} quarterly reports; " + ", ".join(
+        f"{y}: {usd(v)}" for y, v in s.by_year.items()) + (" received from clients" if firm else " spent"))
+    t = Table(title="Clients" if firm else "Who lobbies for them")
+    for col in ("Client" if firm else "Firm", "Amount", "Latest"):
+        t.add_column(col, overflow="fold")
+    for p in s.parties[:25]:
+        label = p["name"] + (" [dim](in-house)[/]" if p["self"] else "")
+        t.add_row(label, usd(p["amount"]), p["last"])
+    out.print(t)
+    if s.issues:
+        out.print("[b]Issues:[/] " + ", ".join(f"{k} ({v})" for k, v in s.issues))
+    if s.agencies:
+        out.print("[b]Contacted:[/] " + ", ".join(f"{k} ({v})" for k, v in s.agencies))
+    if s.foreign:
+        out.print("[red]Foreign entities with an interest:[/] " + ", ".join(
+            f"{f['name']} ({f['country']})" for f in s.foreign))
+    if s.revolving:
+        t = Table(title=f"Revolving door: {len(s.revolving)} lobbyists who held government jobs")
+        for col in ("Lobbyist", "Firm", "Former position"):
+            t.add_column(col, overflow="fold")
+        for r in s.revolving[:30]:
+            t.add_row(r["name"], r["firm"], r["position"][:160])
+        out.print(t)
+    if s.descriptions:
+        out.print("[b]What they lobbied on (sample):[/]")
+        for d in s.descriptions[:8]:
+            out.print(f"  - {d[:200]}")
+
+
+@app.command()
+def offshore(
+    name: str = typer.Argument(..., help="Company, person, or intermediary name; or a node id."),
+    threshold: float = typer.Option(90, help="Fuzzy match threshold."),
+):
+    """ICIJ Offshore Leaks: Panama, Paradise and Pandora Papers, and more."""
+    from .sources import offshore as off
+    c = ctx()
+    if not off.available(c):
+        die("ICIJ data not synced. Run: govint sync offshore")
+    if name.isdigit():
+        n = off.node(c, int(name))
+        hits = [off.Hit(n, 100.0)] if n else []
+    else:
+        hits = off.search(c, name, threshold=threshold)
+    for h in hits:
+        h.links = off.links(c, h.node["id"])
+    if STATE["json"]:
+        return emit_json([{"node": h.node, "score": h.score, "url": h.url, "links": h.links} for h in hits])
+    if not hits:
+        out.print("No match in the Offshore Leaks database.")
+        return
+    for h in hits[:10]:
+        n = h.node
+        bits = [x for x in (n["jurisdiction"], n["countries"], n["status"],
+                            f"incorporated {n['incorporated']}" if n["incorporated"] else "",
+                            f"via {n['provider']}" if n["provider"] else "") if x]
+        root = Tree(f"[b]{n['name']}[/] [dim]{n['kind']}, {n['source']}, score {h.score:.0f}[/]  {h.url}"
+                    + (f"\n[dim]{'; '.join(bits)}[/]" if bits else ""))
+        groups: dict[str, list] = {}
+        for ln in h.links:
+            label = ln["link"] or ln["rel"]
+            groups.setdefault(f"{label} ({'this →' if ln['dir'] == 'out' else '→ this'})", []).append(ln)
+        for label, lns in groups.items():
+            b = root.add(f"[cyan]{label}[/]")
+            for ln in lns[:12]:
+                b.add(f"{ln['name']} [dim]#{ln['id']} {ln['kind']}{', ' + ln['countries'] if ln['countries'] else ''}[/]")
+            if len(lns) > 12:
+                b.add(f"[dim]+{len(lns) - 12} more[/]")
+        out.print(root)
+    out.print("[dim]Source: ICIJ Offshore Leaks Database (ODbL). Appearing in it doesn't imply wrongdoing.[/]")
+
+
+@app.command("grep")
+def grep_cmd(
+    query: str = typer.Argument(..., help='Words or "exact phrase" to find inside SEC filings.'),
+    forms: Optional[str] = typer.Option(None, "--forms", "-f", help="Comma list, e.g. 10-K,8-K,DEF 14A"),
+    since: Optional[str] = typer.Option(None, help="YYYY-MM-DD"),
+    until: Optional[str] = typer.Option(None, help="YYYY-MM-DD"),
+    limit: int = typer.Option(40),
+):
+    """Full-text search of every SEC filing since 2001 (exhibits included)."""
+    c = ctx()
+    q = query if '"' in query or " " not in query else f'"{query}"'
+    try:
+        total, hits, top = edgar.fulltext(c, q, forms=forms.split(",") if forms else None, since=since,
+                                          until=until, pages=max(1, (limit + 99) // 100))
+    except SourceError as e:
+        die(str(e))
+    if STATE["json"]:
+        return emit_json({"total": total, "hits": hits[:limit], "top_filers": top})
+    out.print(f"[b]{total:,}[/] filing documents mention {q}")
+    if top:
+        out.print("[b]Most mentions:[/] " + ", ".join(f"{n} ({k})" for n, k in top[:8]))
+    t = Table()
+    for col in ("Filed", "Filer", "Form", "Document", "Link"):
+        t.add_column(col, overflow="fold")
+    for h in hits[:limit]:
+        t.add_row(h["filed"], h["filer"], h["form"], f"{h['file_type']}: {h['description']}"[:70], h["url"])
+    out.print(t)
+
+
+@app.command()
+def shells(
+    query: Optional[str] = typer.Argument(None, help="Company/person name, or a street address."),
+    top: bool = typer.Option(False, "--top", help="Rank FAA addresses by number of distinct owners."),
+    state: Optional[str] = typer.Option(None, help="With --top: limit to a state."),
+):
+    """Who else is registered at the same address, and who shares officers."""
+    from .sources import shells as sh
+    c = ctx()
+    if top:
+        if not faa.available(c):
+            die("FAA registry not synced. Run: govint sync faa")
+        with err.status("ranking addresses…"):
+            rows = sh.top_faa(c, state=state)
+        if STATE["json"]:
+            return emit_json(rows)
+        t = Table(title="Aircraft registration addresses with the most distinct owners")
+        for col in ("Address", "Owners", "Aircraft", "Sample"):
+            t.add_column(col, overflow="fold")
+        for r in rows:
+            t.add_row(r["address"], str(r["owners"]), str(r["aircraft"]), "; ".join(r["sample"]))
+        out.print(t)
+        return
+    if not query:
+        die("give a name or address, or --top")
+    with err.status("collecting addresses…"):
+        rep = sh.report(c, query)
+    if STATE["json"]:
+        import dataclasses
+        return emit_json([dataclasses.asdict(a) | {"registrants": a.registrants, "mass": a.mass}
+                          for a in rep.addresses] + [{"shared_officers": rep.shared_officers, "notes": rep.notes}])
+    for a in rep.addresses:
+        regs = a.registrants
+        tag = f"  [red]mass-registration address ({len(regs)} registrants)[/]" if a.mass else ""
+        root = Tree(f"[b]{a.text}[/]  [dim]found via {', '.join(a.found_via)}[/]{tag}")
+        if a.faa:
+            b = root.add(f"[cyan]FAA: {len(a.faa)} aircraft registered here[/]")
+            byname: dict[str, list[str]] = {}
+            for r in a.faa:
+                byname.setdefault(r["name"].strip(), []).append(r["n_number"])
+            for nm, tails in sorted(byname.items(), key=lambda kv: -len(kv[1]))[:20]:
+                b.add(f"{nm} [dim]{' '.join(tails[:5])}{' …' if len(tails) > 5 else ''}[/]")
+            if len(byname) > 20:
+                b.add(f"[dim]+{len(byname) - 20} more owners[/]")
+        if a.icij:
+            b = root.add(f"[cyan]ICIJ: {len(a.icij)} offshore entities/officers registered here[/]")
+            for r in a.icij[:20]:
+                b.add(f"{r['name']} [dim]{r['kind']}, {r['source']}, #{r['id']}[/]")
+            if len(a.icij) > 20:
+                b.add(f"[dim]+{len(a.icij) - 20} more[/]")
+        if not a.faa and not a.icij:
+            root.add("[dim]nothing else on file here[/]")
+        out.print(root)
+    if rep.shared_officers:
+        t = Table(title="Officers of matched offshore entities who also run other companies (ICIJ)")
+        for col in ("Officer", "Role", "Of", "Also officer of"):
+            t.add_column(col, overflow="fold")
+        for o in sorted(rep.shared_officers, key=lambda o: -o["also_count"])[:20]:
+            more = f" +{o['also_count'] - 5} more" if o["also_count"] > 5 else ""
+            t.add_row(o["officer"], o["role"], o["of"], "; ".join(o["also"][:5]) + more)
+        out.print(t)
     for n in rep.notes:
         err.print(f"[yellow]note:[/] {n}")

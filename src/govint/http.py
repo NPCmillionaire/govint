@@ -62,9 +62,10 @@ class Http:
         self.cache = Cache(cache_path if use_cache else None)
         self._last: dict[str, float] = {}
         self._pace_lock = threading.Lock()
+        self.spacing = dict(HOST_SPACING)
 
     def _pace(self, host: str) -> None:
-        spacing = HOST_SPACING.get(host)
+        spacing = self.spacing.get(host)
         if not spacing:
             return
         with self._pace_lock:
@@ -82,6 +83,7 @@ class Http:
         json_body: Any = None,
         ttl: float = DEFAULT_TTL,
         parse: str = "json",
+        headers: dict | None = None,
     ) -> Any:
         key_src = json.dumps([method, url, params, json_body], sort_keys=True, default=str)
         # Never let API keys leak into cache keys in readable form; the hash covers it.
@@ -94,7 +96,7 @@ class Http:
         for attempt in range(4):
             self._pace(host)
             try:
-                resp = self.client.request(method, url, params=params, json=json_body)
+                resp = self.client.request(method, url, params=params, json=json_body, headers=headers)
             except httpx.HTTPError as e:
                 if attempt == 3:
                     raise SourceError(f"{host}: {e.__class__.__name__}: {e}") from e
