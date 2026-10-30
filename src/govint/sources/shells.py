@@ -1,6 +1,6 @@
 """Shell-company clustering: who else is registered at the same address, and who shares officers.
 
-Pulls addresses for a name from the FAA registry, ICIJ Offshore Leaks and SEC EDGAR, then lists
+Pulls addresses for a name from the FAA registry, PPP loans, ICIJ Offshore Leaks and SEC EDGAR, then lists
 everything else on file at each one. An address with dozens of unrelated registrants is usually a
 registered agent, trust company or mail drop, which is where shell companies live."""
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from .. import names
 from ..http import SourceError
-from . import edgar, faa, offshore
+from . import edgar, faa, offshore, ppp
 from .base import Ctx
 
 MASS = 10  # distinct registrants at one address before we call it a mass-registration address
@@ -25,6 +25,7 @@ class Address:
     found_via: list[str] = field(default_factory=list)
     faa: list[dict] = field(default_factory=list)  # aircraft registrations here
     icij: list[dict] = field(default_factory=list)  # offshore entities/officers here
+    ppp: list = field(default_factory=list)  # PPP loans to borrowers here
 
     @property
     def registrants(self) -> list[str]:
@@ -33,6 +34,8 @@ class Address:
             seen.setdefault(names.normalize(r["name"]), r["name"])
         for r in self.icij:
             seen.setdefault(names.normalize(r["name"]), r["name"])
+        for ln in self.ppp:
+            seen.setdefault(names.normalize(ln.row["borrower"]), ln.row["borrower"])
         return list(seen.values())
 
     @property
@@ -128,6 +131,10 @@ def report(ctx: Ctx, query: str) -> Report:
         if faa.available(ctx):
             for r in faa.by_owner(ctx, query):
                 add(_faa_addr_text(r), f"FAA {r['n_number']}")
+        if ppp.available(ctx):
+            for ln in ppp.search(ctx, query, threshold=95, limit=10):
+                r = ln.row
+                add(f"{r['address']}, {r['city']}, {r['state']} {(r['zip'] or '')[:5]}", "PPP borrower")
         if offshore.available(ctx):
             for h in offshore.search(ctx, query, threshold=95, limit=8):
                 for ln in offshore.links(ctx, h.node["id"]):
@@ -155,6 +162,8 @@ def report(ctx: Ctx, query: str) -> Report:
         a.faa = faa_at(ctx, a.text)
         if offshore.available(ctx):
             a.icij = offshore.at_address(ctx, a.text)
+        if ppp.available(ctx):
+            a.ppp = ppp.at_address(ctx, a.text)
     rep.addresses = sorted(found.values(), key=lambda a: -len(a.registrants))
     if not faa.available(ctx):
         rep.notes.append("FAA registry not synced (`govint sync faa`).")

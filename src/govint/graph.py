@@ -18,6 +18,7 @@ AWARD = "award"
 AGENCY = "agency"
 AIRCRAFT = "aircraft"
 ADDRESS = "address"
+CASE = "case"
 
 
 @dataclass
@@ -131,7 +132,7 @@ class Graph:
         colors = {
             COMPANY: "#4C78A8", PERSON: "#F58518", COMMITTEE: "#54A24B", CANDIDATE: "#B279A2",
             SANCTION: "#E45756", AWARD: "#72B7B2", AGENCY: "#9D755D", AIRCRAFT: "#EECA3B",
-            ADDRESS: "#BAB0AC",
+            ADDRESS: "#BAB0AC", CASE: "#B279A2",
         }
 
         def q(s: str) -> str:

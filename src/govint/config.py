@@ -32,6 +32,7 @@ class Settings:
     mirror: str = DEFAULT_MIRROR  # GitHub releases base for prebuilt datasets
     ntfy: str | None = None  # ntfy topic (or full URL) for watch alerts
     lda_key: str | None = None  # lda.gov API key: 120 req/min instead of 15
+    courtlistener_token: str | None = None  # CourtListener API token (free account)
 
     @property
     def user_agent(self) -> str:
@@ -68,6 +69,7 @@ def load() -> Settings:
         mirror=pick("GOVINT_MIRROR", "mirror") or DEFAULT_MIRROR,
         ntfy=pick("GOVINT_NTFY", "ntfy"),
         lda_key=pick("GOVINT_LDA_KEY", "lda_key"),
+        courtlistener_token=pick("GOVINT_COURTLISTENER_TOKEN", "courtlistener_token"),
     )
 
 

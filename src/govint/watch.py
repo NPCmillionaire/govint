@@ -14,10 +14,10 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 
 from .http import SourceError
-from .sources import congress, csl, edgar, faa, leaks, lobby, sky, usaspending
+from .sources import congress, courts, csl, edgar, faa, leaks, lobby, sky, usaspending
 from .sources.base import Ctx
 
-KINDS = ("company", "ticker", "tail", "owner", "keyword", "phrase", "lobbying")
+KINDS = ("company", "ticker", "tail", "owner", "keyword", "phrase", "lobbying", "court")
 # High-volume SEC forms that drown out signal.
 SKIP_FORMS = {"424B2", "424B3", "424B5", "FWP", "424B4", "424B7", "S-8 POS", "SC 13G/A", "13F-HR"}
 
@@ -201,6 +201,14 @@ def _lobbying(ctx: Ctx, item: Item) -> list[Event]:
     return out
 
 
+def _court(ctx: Ctx, item: Item) -> list[Event]:
+    """New federal dockets naming the party."""
+    _total, cases = courts.search(ctx, item.value, limit=40)
+    return [Event(item, "Court", f"cl:{c.court_id}:{c.docket}",
+                  f"{c.name} ({c.court} {c.docket}, filed {c.filed})" + (f" [{', '.join(c.tags)}]" if c.tags else ""),
+                  c.url, c.filed) for c in cases]
+
+
 def _fleet(ctx: Ctx, item: Item) -> dict[str, dict]:
     if not faa.available(ctx):
         return {}
@@ -270,7 +278,7 @@ def run(ctx: Ctx, log: Callable[[str], None] = lambda _: None) -> tuple[list[Eve
         if it.kind in ("tail", "owner"):
             continue
         fn = {"company": _company, "ticker": _ticker, "keyword": _keyword, "phrase": _phrase,
-              "lobbying": _lobbying}[it.kind]
+              "lobbying": _lobbying, "court": _court}[it.kind]
         try:
             found.append((it, fn(ctx, it)))
         except SourceError as e:

@@ -8,7 +8,7 @@ from typing import Callable
 from . import names
 from .graph import COMPANY, PERSON, Edge, Graph, Node, Result
 from .http import SourceError
-from .sources import congress, csl, edgar, faa, fara, fec, gleif, lobby, offshore, sam, usaspending
+from .sources import congress, courts, csl, edgar, faa, fara, fec, gleif, lobby, offshore, ppp, sam, usaspending
 from .sources.base import Ctx, cite
 
 Progress = Callable[[str], None]
@@ -73,6 +73,7 @@ def _remote(ctx: Ctx, subject: Node, full: bool) -> list[tuple[str, Callable[[],
             ("FEC", lambda: fec.result(ctx, subject)),
             ("SAM.gov", lambda: sam.result(ctx, subject)),
             ("Lobbying", lambda: lobby.result(ctx, subject)),
+            ("CourtListener", lambda: courts.result(ctx, subject)),
         ]
     return jobs
 
@@ -82,7 +83,7 @@ def _screen_local(ctx: Ctx, g: Graph, nodes: list[Node], progress: Progress) -> 
     if not targets:
         return
     have_csl, have_faa, have_fara = csl.available(ctx), faa.available(ctx), fara.available(ctx)
-    have_icij = offshore.available(ctx)
+    have_icij, have_ppp = offshore.available(ctx), ppp.available(ctx)
     progress(f"screening {len(targets)} names locally")
     for n in targets:
         if have_csl:
@@ -93,6 +94,8 @@ def _screen_local(ctx: Ctx, g: Graph, nodes: list[Node], progress: Progress) -> 
             g.merge(_safe("FARA", lambda n=n: fara.result(ctx, n)))
         if have_icij:
             g.merge(_safe("ICIJ", lambda n=n: offshore.result(ctx, n)))
+        if have_ppp and n.kind == COMPANY:
+            g.merge(_safe("PPP", lambda n=n: ppp.result(ctx, n)))
 
 
 def pivot(ctx: Ctx, query: str, depth: int = 1, related_budget: int = 6,
@@ -104,6 +107,8 @@ def pivot(ctx: Ctx, query: str, depth: int = 1, related_budget: int = 6,
         g.notes.append("CSL not synced: run `govint sync csl` to enable sanctions screening.")
     if not faa.available(ctx):
         g.notes.append("FAA registry not synced: run `govint sync faa` to enable aircraft lookups.")
+    if not ctx.settings.courtlistener_token:
+        g.notes.append("Court records skipped: set `govint config courtlistener_token <token>` (free account).")
 
     def run(subjects: list[Node], full: bool) -> list[Node]:
         jobs = [(f"{label} ({s.label})", fn) for s in subjects for label, fn in _remote(ctx, s, full)]

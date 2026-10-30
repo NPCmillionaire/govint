@@ -132,3 +132,71 @@ def test_edgar_fulltext_builds_document_urls(ctx):
     assert route.calls[0].request.url.params["forms"] == "10-K"
     assert total == 1 and top == [("MDU RESOURCES GROUP INC  (MDU)", 3)]
     assert hits[0]["url"] == "https://www.sec.gov/Archives/edgar/data/67716/000006771624000017/a2023ex21.htm"
+
+
+# ---- PPP
+
+def test_ppp_load_search_flags_address_and_clusters(ctx, tmp_path):
+    import sqlite3
+
+    from govint.sources import ppp
+    head = ",".join(ppp.COLS)
+    rows = [
+        "1,04/10/2020,PPP,ACME WIDGETS LLC,10 Main St,Dover,DE,19901-1234,Paid in Full,500000,500000,505000,"
+        "01/01/2021,50,332710,LLC,Existing or more than 2 years old,Bank A,Bank A,KENT,DE,DE-00,,,,,",
+        "2,04/11/2020,PPP,SHELL ONE LLC,10 Main Street,Dover,DE,19901,Charged Off,900000,900000,,,3,531110,LLC,"
+        "New Business or 2 years or less,Bank B,Bank B,KENT,DE,DE-00,,,,,",
+        "3,04/12/2020,PPP,SHELL TWO LLC,10 MAIN ST,DOVER,DE,19901,Paid in Full,150000,150000,151000,02/01/2021,,"
+        "531110,LLC,Existing or more than 2 years old,Bank B,Bank B,KENT,DE,DE-00,,,,,",
+    ]
+    f = tmp_path / "ppp.csv"
+    f.write_text(head + "\n" + "\n".join(rows) + "\n")
+    c = sqlite3.connect(ppp.path(ctx))
+    c.executescript(ppp._SCHEMA)
+    assert ppp.load_csv(c, f) == 3
+    c.executescript(ppp._INDEXES)
+    c.commit()
+    hits = ppp.search(ctx, "Acme Widgets")
+    assert [h["loan"] for h in hits] == ["1"] and hits[0]["approved"] == "2020-04-10" and not hits[0].flags
+    shell = ppp.search(ctx, "Shell One")[0]
+    assert any("payroll cap" in x for x in shell.flags) and any("charged off" in x for x in shell.flags)
+    assert any("no jobs" in x for x in ppp.search(ctx, "Shell Two")[0].flags)
+    assert {ln["loan"] for ln in ppp.at_address(ctx, "10 Main Street, Dover, DE 19901")} == {"1", "2", "3"}
+    cl = ppp.clusters(ctx, min_borrowers=3)
+    assert cl[0]["borrowers"] == 3 and len(cl[0]["sample"]) == 3
+
+
+# ---- CourtListener
+
+def test_courts_needs_token(ctx):
+    from govint.http import SourceError
+    from govint.sources import courts
+    with pytest.raises(SourceError, match="token"):
+        courts.search(ctx, "Acme")
+
+
+def test_courts_search_filters_parties_and_tags(tmp_path):
+    from govint.sources import courts
+    s = Settings(contact="t@example.com", data_gov_key="DEMO_KEY", sam_key=None, data_dir=tmp_path,
+                 courtlistener_token="tok")
+    c = Ctx(settings=s, http=Http(s.user_agent, s.cache_path))
+    page1 = {"count": 3, "next": "https://www.courtlistener.com/api/rest/v4/search/?cursor=abc%3D&type=r",
+             "results": [{"caseName": "United States v. Acme Corp", "court": "D. Del.", "court_id": "ded",
+                          "docketNumber": "1:23-cr-00042", "dateFiled": "2023-05-01", "suitNature": "",
+                          "docket_absolute_url": "/docket/1/us-v-acme/", "party": ["Acme Corp", "USA"]},
+                         {"caseName": "Doe v. Acmeville Bakery", "court_id": "nysd", "docketNumber": "1:22-cv-1",
+                          "dateFiled": "2022-01-01", "party": ["Acmeville Bakery", "John Doe"]}]}
+    page2 = {"count": 3, "next": None,
+             "results": [{"caseName": "ex rel. Roe v. Acme Corp", "court_id": "vaed", "docketNumber": "1:21-cv-9",
+                          "dateFiled": "2021-01-01", "suitNature": "375 False Claims Act",
+                          "docket_absolute_url": "/docket/3/", "party": ["Acme Corp"]}]}
+    with respx.mock:
+        route = respx.get(f"{courts.API}/search/").mock(side_effect=[httpx.Response(200, json=page1),
+                                                                      httpx.Response(200, json=page2)])
+        total, cases = courts.search(c, "Acme Corp")
+    assert route.calls[0].request.headers["Authorization"] == "Token tok"
+    assert 'party:("Acme Corp")' in route.calls[0].request.url.params["q"]
+    assert route.calls[1].request.url.params["cursor"] == "abc="
+    assert total == 3 and [x.docket for x in cases] == ["1:23-cr-00042", "1:21-cv-9"]
+    assert "criminal" in cases[0].tags and cases[0].url.startswith("https://www.courtlistener.com/docket/1")
+    assert any("False Claims" in t for t in cases[1].tags)

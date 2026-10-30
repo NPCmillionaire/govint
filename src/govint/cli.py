@@ -73,6 +73,7 @@ CONFIG_KEYS = {"mirror": "Base URL for prebuilt dataset mirrors (GitHub releases
                "contact": "Email for the SEC User-Agent (required by SEC)",
                "data_gov_key": "api.data.gov key for FEC (https://api.data.gov/signup/)",
                "sam_key": "SAM.gov API key (sam.gov > Account Details)",
+               "courtlistener_token": "CourtListener API token (https://www.courtlistener.com/profile/api/)",
                "lda_key": "lda.gov lobbying API key (https://lda.gov/api/register/), raises 15 -> 120 req/min"}
 
 
@@ -104,8 +105,9 @@ def config_cmd(key: Optional[str] = typer.Argument(None), value: Optional[str] =
 
 @app.command()
 def sync(
-    dataset: str = typer.Argument("all", help="csl, faa, fara, offshore, or all"),
+    dataset: str = typer.Argument("all", help="csl, faa, fara, offshore, ppp, or all"),
     file: Optional[Path] = typer.Option(None, "--file", help="Use an already-downloaded FAA zip."),
+    full: bool = typer.Option(False, "--all-loans", help="PPP: load all 11.5M loans (~5 GB), not just $150k+."),
 ):
     """Download bulk datasets for offline use (sanctions list, FAA registry, FARA)."""
     c = ctx()
@@ -145,8 +147,17 @@ def sync(
             except SourceError as e:
                 err.print(f"[red]ICIJ failed:[/] {e}")
                 failed = True
-    if dataset not in ("csl", "faa", "fara", "offshore", "all"):
-        die("dataset must be csl, faa, fara, offshore, or all")
+    if dataset in ("ppp", "all"):
+        from .sources import ppp as ppp_src
+        with err.status("SBA PPP loans…") as st:
+            try:
+                n = ppp_src.sync(c, full=full, progress=lambda m: st.update(f"PPP: {m}…"))
+                out.print(f"PPP: {n:,} loans" + ("" if full else " of $150k or more (--all-loans for the rest)"))
+            except SourceError as e:
+                err.print(f"[red]PPP failed:[/] {e}")
+                failed = True
+    if dataset not in ("csl", "faa", "fara", "offshore", "ppp", "all"):
+        die("dataset must be csl, faa, fara, offshore, ppp, or all")
     if failed:
         raise typer.Exit(1)
 
@@ -223,10 +234,18 @@ def status():
                                          f"loaded {_age(offshore.path(c))}")
     else:
         t.add_row("ICIJ Offshore Leaks", "[yellow]not synced[/] (govint sync offshore)")
+    from .sources import ppp as ppp_src
+    if ppp_src.available(c):
+        m = ppp_src.meta(c)
+        t.add_row("PPP loans", f"{int(m.get('loans', 0)):,} loans ({'all' if m.get('scope') == 'all' else '$150k+'}), "
+                               f"SBA release {m.get('release')}")
+    else:
+        t.add_row("PPP loans", "[yellow]not synced[/] (govint sync ppp)")
     t.add_row("SEC contact", s.contact or "[red]unset[/] (govint config contact you@example.com)")
     t.add_row("FEC key", "DEMO_KEY" if s.data_gov_key == "DEMO_KEY" else "set")
     t.add_row("SAM key", "set" if s.sam_key else "[yellow]unset[/]")
     t.add_row("LDA key", "set" if s.lda_key else "unset (lobbying limited to 15 req/min)")
+    t.add_row("CourtListener", "set" if s.courtlistener_token else "[yellow]unset[/] (court records skipped)")
     out.print(t)
 
 
@@ -913,7 +932,7 @@ app.add_typer(watch_app, name="watch")
 
 @watch_app.command("add")
 def watch_add(
-    kind: str = typer.Argument(..., help="company, ticker, tail, owner, keyword (sanctions), phrase (SEC full text), or lobbying"),
+    kind: str = typer.Argument(..., help="company, ticker, tail, owner, keyword (sanctions), phrase (SEC full text), lobbying, or court"),
     value: str = typer.Argument(...),
 ):
     """Add something to watch. Its first check records a silent baseline."""
@@ -1254,7 +1273,8 @@ def shells(
         rep = sh.report(c, query)
     if STATE["json"]:
         import dataclasses
-        return emit_json([dataclasses.asdict(a) | {"registrants": a.registrants, "mass": a.mass}
+        return emit_json([dataclasses.asdict(a) | {"ppp": [ln.row for ln in a.ppp], "registrants": a.registrants,
+                                                    "mass": a.mass}
                           for a in rep.addresses] + [{"shared_officers": rep.shared_officers, "notes": rep.notes}])
     for a in rep.addresses:
         regs = a.registrants
@@ -1275,7 +1295,15 @@ def shells(
                 b.add(f"{r['name']} [dim]{r['kind']}, {r['source']}, #{r['id']}[/]")
             if len(a.icij) > 20:
                 b.add(f"[dim]+{len(a.icij) - 20} more[/]")
-        if not a.faa and not a.icij:
+        if a.ppp:
+            b = root.add(f"[cyan]PPP: {len(a.ppp)} loans to borrowers here[/]")
+            for ln in a.ppp[:20]:
+                r = ln.row
+                b.add(f"{r['borrower']} [dim]{usd(r['amount'])} on {r['approved']}, {int(r['jobs'] or 0)} jobs[/]"
+                      + (f" [red]{'; '.join(ln.flags)}[/]" if ln.flags else ""))
+            if len(a.ppp) > 20:
+                b.add(f"[dim]+{len(a.ppp) - 20} more[/]")
+        if not a.faa and not a.icij and not a.ppp:
             root.add("[dim]nothing else on file here[/]")
         out.print(root)
     if rep.shared_officers:
@@ -1288,3 +1316,104 @@ def shells(
         out.print(t)
     for n in rep.notes:
         err.print(f"[yellow]note:[/] {n}")
+
+
+# ---------------------------------------------------------------- PPP, courts
+
+
+def _loan_table(title: str, loans) -> Table:
+    t = Table(title=title)
+    for col in ("Borrower", "Where", "Approved", "Amount", "Forgiven", "Jobs", "Lender", "Flags"):
+        t.add_column(col, overflow="fold")
+    for ln in loans:
+        r = ln.row
+        t.add_row(r["borrower"] + (f" [dim]({r['business_type']})[/]" if r["business_type"] else ""),
+                  f"{r['address']}, {r['city']}, {r['state']} {(r['zip'] or '')[:5]}", r["approved"],
+                  usd(r["amount"]), usd(r["forgiven"]) if r["forgiven"] else "[dim]-[/]",
+                  str(int(r["jobs"])) if r["jobs"] else "[dim]0[/]", r["lender"],
+                  "[red]" + "; ".join(ln.flags) + "[/]" if ln.flags else "")
+    return t
+
+
+@app.command("ppp")
+def ppp_cmd(
+    name: Optional[str] = typer.Argument(None, help="Borrower name, or a street address with ZIP."),
+    state: Optional[str] = typer.Option(None, "--state", "-s"),
+    zip_code: Optional[str] = typer.Option(None, "--zip"),
+    lender: Optional[str] = typer.Option(None, "--lender"),
+    flagged: bool = typer.Option(False, "--flagged", help="Only loans over the per-job payroll cap or with no jobs."),
+    clusters: bool = typer.Option(False, "--clusters", help="Addresses that borrowed under many different names."),
+    limit: int = typer.Option(30),
+):
+    """SBA Paycheck Protection Program loans: who got what, and what looks off."""
+    from .sources import ppp as pp
+    c = ctx()
+    if not pp.available(c):
+        die("PPP data not synced. Run: govint sync ppp")
+    if clusters:
+        rows = pp.clusters(c, state=state, limit=limit)
+        if STATE["json"]:
+            return emit_json(rows)
+        t = Table(title="Addresses with PPP loans to the most differently named borrowers")
+        for col in ("Address", "Borrowers", "Loans", "Total", "Sample"):
+            t.add_column(col, overflow="fold")
+        for r in rows:
+            t.add_row(f"{r['address']}, {r['city']}, {r['state']} {(r['zip'] or '')[:5]}", str(r["borrowers"]),
+                      str(r["loans"]), usd(r["total"]), "; ".join(r["sample"]))
+        out.print(t)
+        return
+    if name and name.strip()[:1].isdigit():
+        loans, title = pp.at_address(c, name, zip_code), f"PPP loans at {name}"
+    elif name:
+        loans, title = pp.search(c, name, state=state, limit=limit), f"PPP loans matching {name!r}"
+    else:
+        loans = pp.top(c, state=state, lender=lender, zip_code=zip_code, flagged=flagged, limit=limit)
+        title = "Largest PPP loans" + (f" in {state.upper()}" if state else "") + (f" in {zip_code}" if zip_code else "") \
+            + (f" from {lender}" if lender else "") + (" over the per-job cap or with no jobs" if flagged else "")
+    if STATE["json"]:
+        return emit_json([ln.row | {"score": ln.score, "flags": ln.flags} for ln in loans])
+    if not loans:
+        scope = pp.meta(c).get("scope")
+        out.print("No PPP loans match." + (" Only $150k+ loans are loaded; `govint sync ppp --all-loans` adds the rest."
+                                          if scope != "all" else ""))
+        return
+    out.print(_loan_table(title, loans))
+    total = sum(ln.row["amount"] or 0 for ln in loans)
+    out.print(f"{len(loans)} loans, {usd(total)}. Source: {pp.DATASET_URL}")
+
+
+@app.command("court")
+def court_cmd(
+    name: str = typer.Argument(..., help="Party name (company or person)."),
+    opinions: bool = typer.Option(False, "--opinions", help="Search written opinions instead of dockets."),
+    since: Optional[str] = typer.Option(None, help="Filed on or after YYYY-MM-DD."),
+    limit: int = typer.Option(40),
+):
+    """Federal lawsuits, prosecutions and bankruptcies (CourtListener / PACER RECAP)."""
+    from .sources import courts as ct
+    c = ctx()
+    try:
+        total, cases = ct.search(c, name, opinions=opinions, limit=limit, since=since)
+    except SourceError as e:
+        die(str(e))
+    s = ct.summarize(total, cases)
+    if STATE["json"]:
+        import dataclasses
+        return emit_json(dataclasses.asdict(s))
+    if not cases:
+        out.print(f"No federal {'opinions' if opinions else 'dockets'} with {name!r} as a party.")
+        return
+    out.print(f"[b]{name}[/]: {total:,} {'opinions' if opinions else 'dockets'} found, showing {len(cases)} "
+              "where the name matches a party")
+    if s.tagged:
+        out.print("[red]" + ", ".join(f"{k}: {v}" for k, v in s.tagged.items()) + "[/]")
+    if s.by_nature:
+        out.print("[b]Case types:[/] " + ", ".join(f"{k} ({v})" for k, v in s.by_nature))
+    t = Table()
+    for col in ("Filed", "Case", "Court", "Docket", "Type", "Status", "Link"):
+        t.add_column(col, overflow="fold")
+    for cs in cases:
+        tags = f" [red][{', '.join(cs.tags)}][/]" if cs.tags else ""
+        t.add_row(cs.filed, cs.name + tags, cs.court, cs.docket, cs.nature or cs.cause,
+                  f"closed {cs.terminated}" if cs.terminated else "open", cs.url)
+    out.print(t)

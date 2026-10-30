@@ -35,6 +35,10 @@ def _usd(x) -> str:
 
 
 def _flag_text(f: str) -> str:
+    if f.startswith("court:"):
+        return f"Party to a federal case tagged {f.split(':', 1)[1]} (see Court records)"
+    if f.startswith("ppp:"):
+        return f"PPP loan: {f.split(':', 1)[1]}"
     if f.startswith("revolving-door:"):
         return f"{f.split(':', 1)[1]} of its lobbyists previously held government jobs (see Lobbying)"
     if f.startswith("lobbying-foreign-interest:"):
@@ -211,6 +215,39 @@ def render(g: Graph, seed: Node) -> str:
             L.append(f"- Lobbyists who held government jobs ({len(ex)}):")
             for e, p in ex[:15]:
                 L.append(f"  - {_link(p)} ({p.props.get('firm')}): {e.props.get('former_position')}")
+        L.append("")
+
+    # PPP
+    loans = [(e, g.nodes[e.src]) for e in g.edges.values() if e.rel == "ppp_loan_to" and e.dst in id_set]
+    if loans:
+        seen_l: set[str] = set()
+        L.append("## PPP loans (SBA)")
+        L.append("| Borrower | Approved | Amount | Forgiven | Jobs | Lender | Notes |")
+        L.append("|---|---|---|---|---|---|---|")
+        for e, ln in sorted(loans, key=lambda x: x[1].props.get("approved") or ""):
+            if ln.id in seen_l:
+                continue
+            seen_l.add(ln.id)
+            p = ln.props
+            notes = "; ".join(f.split(":", 1)[1] for f in ln.flags)
+            L.append(f"| {e.props.get('borrower')} ({p.get('city')}, {p.get('state')}) | {p.get('approved')} | "
+                     f"{_usd(p.get('amount'))} | {_usd(p.get('forgiven')) if p.get('forgiven') else ''} | "
+                     f"{int(p['jobs']) if p.get('jobs') else ''} | {p.get('lender')} | {notes} |")
+        L.append("")
+
+    # Courts
+    cases = [(e, g.nodes[e.dst]) for e in g.edges.values() if e.rel == "party_to" and e.src in id_set]
+    if cases:
+        seen_c: set[str] = set()
+        L.append("## Court records (federal, via CourtListener)")
+        for e, c in sorted(cases, key=lambda x: x[1].props.get("filed") or "", reverse=True):
+            if c.id in seen_c:
+                continue
+            seen_c.add(c.id)
+            p = c.props
+            tags = f" **[{', '.join(p['tags'])}]**" if p.get("tags") else ""
+            L.append(f"- {p.get('filed')}: {_link(c)}, {p.get('court')} {p.get('docket')}"
+                     f"{', ' + p['nature'] if p.get('nature') else ''}{tags}")
         L.append("")
 
     # Sanctions
