@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>govint: public-records OSINT from the command line</title>
+<meta name="description" content="Give govint a company or person name. It searches 20 US government databases, links the results into one graph, and writes a sourced dossier.">
+<meta property="og:title" content="govint">
+<meta property="og:description" content="Public-records OSINT from the command line. SEC, sanctions, federal spending, FEC, lobbying, FAA, PPP, ICIJ and more, in one sourced dossier.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-row">
+    <span class="mark">govint</span>
+    <nav>
+      <a href="#sample">sample</a>
+      <a href="#sources">sources</a>
+      <a href="#commands">commands</a>
+      <a href="#install">install</a>
+      <a href="https://github.com/NPCmillionaire/govint">github</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section class="hero wrap">
+  <p class="stamp">PUBLIC RECORDS · US ONLY · OFFLINE WHERE POSSIBLE</p>
+  <h1>One name in.<br>A sourced dossier out.</h1>
+  <p class="lede">govint searches 20 US government databases for a company or person, links what it finds into one entity graph, and writes a markdown brief where every line cites its source record.</p>
+  <div class="cmd">
+    <pre><code><span class="p">$</span> govint brief "Palantir Technologies" -o palantir.md</code></pre>
+    <button class="copy" data-copy='govint brief "Palantir Technologies" -o palantir.md' type="button">copy</button>
+  </div>
+</section>
+
+<section id="sample" class="wrap">
+  <h2><span class="n">01</span> What you get</h2>
+  <p class="note">An excerpt from a real run on 2026-11-19, trimmed for length. Links go to the original records.</p>
+
+  <article class="dossier">
+    <div class="dossier-head">
+      <span>palantir.md</span><span>govint brief · 67 nodes · 72 edges</span>
+    </div>
+    <div class="doc">
+      <h3 class="doc-title">Palantir Technologies</h3>
+      <p class="doc-meta"><em>Automated from public records; name matches are fuzzy, so verify before relying on any line.</em></p>
+
+      <h4>Flags</h4>
+      <ul><li class="flag"><strong>30 of its lobbyists previously held government jobs (see Lobbying)</strong></li></ul>
+
+      <h4>Identity</h4>
+      <ul>
+        <li><a href="https://search.gleif.org/#/record/549300UVN46B3BBDHO85">PALANTIR TECHNOLOGIES INC.</a>: LEI 549300UVN46B3BBDHO85; Jurisdiction US-DE</li>
+        <li><a href="https://www.usaspending.gov/recipient/1ea8a9a4-3726-3491-9040-66950bb67606-P/latest">PALANTIR TECHNOLOGIES INC.</a>: UEI FSY4LVSBGWB7</li>
+        <li>Subsidiary: <a href="https://search.gleif.org/#/record/549300ULXLFSKYE9I809">PALANTIR SHAKTI TECHNOLOGIES PRIVATE LIMITED</a> (IN)</li>
+      </ul>
+
+      <h4>Federal money (USAspending)</h4>
+      <p>Lifetime federal obligations across matched recipient records: <strong>$6,155,163,810</strong></p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Award</th><th>Amount</th><th>Agency</th><th>Start</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><a href="https://www.usaspending.gov/award/CONT_AWD_W911QX24F0053_9700_W911QX24D0012_9700">W911QX24F0053</a></td><td class="num">$292,680,689</td><td>Army</td><td>2024-06-18</td><td>Task order #1 for Maven Smart System, UI/UX</td></tr>
+            <tr><td><a href="https://www.usaspending.gov/award/CONT_AWD_FA880621C0010_9700_-NONE-_-NONE-">FA880621C0010</a></td><td class="num">$195,724,056</td><td>Air Force</td><td>2021-05-01</td><td>Agile, scalable data platform</td></tr>
+            <tr><td><a href="https://www.usaspending.gov/award/CONT_AWD_70CTD022FR0000170_7012_GS35F0086U_4730">70CTD022FR0000170</a></td><td class="num">$170,765,322</td><td>ICE</td><td>2022-09-26</td><td>Investigative case management O&amp;M</td></tr>
+            <tr><td><a href="https://www.usaspending.gov/award/CONT_AWD_W519TC25C0008_9700_-NONE-_-NONE-">W519TC25C0008</a></td><td class="num">$103,425,091</td><td>Army</td><td>2024-12-13</td><td>Army Vantage SaaS</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Political money (FEC)</h4>
+      <ul>
+        <li>PAC: <a href="https://www.fec.gov/data/committee/C00498691/">EMPLOYEES OF PALANTIR TECHNOLOGIES INC. PAC</a>
+          <ul>
+            <li>$10,000 → <a href="https://www.fec.gov/data/committee/C00000935/">DCCC</a> (2 payments, 2026 cycle)</li>
+            <li>$5,000 → <a href="https://www.fec.gov/data/committee/C00458828/">TEAM GRAHAM, INC.</a> (1 payment, 2026 cycle)</li>
+          </ul>
+        </li>
+        <li>Individual donations listing this employer: $880,000 → <a href="https://www.fec.gov/data/committee/C00858373/">GROW THE MAJORITY</a> (3 donations)</li>
+      </ul>
+
+      <h4>Lobbying (LDA)</h4>
+      <ul>
+        <li>Reported lobbying spend, last two years: <strong>$18,215,000</strong></li>
+        <li>Pays <a href="https://lda.gov/filings/public/filing/9f598452-a4f7-40c0-b1f6-1268e4a47949/print/">MILLER STRATEGIES, LLC</a>: $1,300,000 (latest 2026 Q3)</li>
+        <li>Pays <a href="https://lda.gov/filings/public/filing/94b568b6-5bd6-4888-9988-1791ae8fe334/print/">BALLARD PARTNERS</a>: $960,000 (latest 2026 Q3)</li>
+        <li>Lobbyist <a href="https://lda.gov/filings/public/filing/6866108b-0737-4ea8-a07e-72f3f08878b4/print/">Jeff Miller</a> (BALLARD PARTNERS): Former Member, U.S. Congress</li>
+        <li>Lobbyist <a href="https://lda.gov/filings/public/filing/17704933-3600-4a48-bccf-d0fad80d4253/print/">Jack Schuler</a> (INVARIANT LLC): Budget Director, House Armed Services Committee (2009–2019)</li>
+      </ul>
+
+      <h4>Coverage notes</h4>
+      <ul class="muted">
+        <li>CSL not synced: run <code>govint sync csl</code> to enable sanctions screening.</li>
+        <li>SAM.gov skipped: no API key.</li>
+      </ul>
+    </div>
+  </article>
+  <p class="note">Briefs list what they couldn't check, so a gap in the data never reads as a clean result.</p>
+</section>
+
+<section id="sources" class="wrap">
+  <h2><span class="n">02</span> Sources</h2>
+  <p class="note">The sanctions list, FAA registry, FARA, ICIJ and PPP data are synced locally and searched offline. Everything else is queried live and cached for 24 hours.</p>
+  <div class="scroll">
+    <table class="sources">
+      <thead><tr><th>Source</th><th>What it adds</th><th>Key</th></tr></thead>
+      <tbody>
+        <tr><td>SEC EDGAR</td><td>Company profile, addresses, former names, filings, insiders and their trades (Forms 3/4/5)</td><td>No, needs a contact email</td></tr>
+        <tr><td>Consolidated Screening List</td><td>11 US sanctions and export lists (OFAC SDN, BIS Entity List, ITAR debarred, etc.), screened offline</td><td>No</td></tr>
+        <tr><td>USAspending</td><td>Recipient IDs (UEI), parent company, lifetime federal dollars, top contracts and grants</td><td>No</td></tr>
+        <tr><td>GLEIF</td><td>LEI, jurisdiction, parent, ultimate parent, subsidiaries</td><td>No</td></tr>
+        <tr><td>FEC</td><td>Corporate PACs, who the PACs pay, donations by employees</td><td class="key">Free api.data.gov key</td></tr>
+        <tr><td>SAM.gov</td><td>Registration, CAGE code, exclusions (debarments)</td><td class="key">Free SAM.gov key</td></tr>
+        <tr><td>FAA registry</td><td>Aircraft by tail number, Mode S hex, or owner name, offline</td><td>No</td></tr>
+        <tr><td>House Clerk PTRs</td><td>Every House member's disclosed stock trade, parsed from the PDFs</td><td>No</td></tr>
+        <tr><td>congress-legislators</td><td>Current members and committee assignments</td><td>No</td></tr>
+        <tr><td>openFDA</td><td>Device clearances (510k, De Novo, PMA), new device listings, drug approvals</td><td>No</td></tr>
+        <tr><td>OpenSky / your receiver</td><td>Live ADS-B positions, joined to the FAA registry</td><td>No</td></tr>
+        <tr><td>Census geocoder</td><td>Street address to coordinates</td><td>No</td></tr>
+        <tr><td>FARA (DOJ)</td><td>Registered foreign agents, the countries and companies they represent, and their staff</td><td>No</td></tr>
+        <tr><td>EPA ECHO</td><td>Regulated facilities near a location, with violations and penalties</td><td>No</td></tr>
+        <tr><td>USGS / NWS</td><td>Earthquake history and active weather alerts for a location</td><td>No</td></tr>
+        <tr><td>Lobbying Disclosure Act</td><td>Lobbying spend, firms hired, issues, agencies contacted, lobbyists' prior government jobs</td><td>No (optional key)</td></tr>
+        <tr><td>ICIJ Offshore Leaks</td><td>Panama, Paradise and Pandora Papers: 800k offshore entities, officers, intermediaries, addresses, offline</td><td>No</td></tr>
+        <tr><td>SBA PPP loans</td><td>Every PPP loan: borrower, address, amount, jobs, lender, forgiveness, offline</td><td>No</td></tr>
+        <tr><td>CourtListener</td><td>Federal lawsuits, prosecutions, bankruptcies and opinions by party name</td><td class="key">Free token</td></tr>
+        <tr><td>SEC full-text search</td><td>Every word of every EDGAR filing since 2001, exhibits included</td><td>No</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="commands" class="wrap">
+  <h2><span class="n">03</span> Commands</h2>
+  <dl class="cmds">
+    <div><dt>brief NAME</dt><dd>Markdown dossier with flags and citations.</dd></div>
+    <div><dt>pivot NAME</dt><dd>Linked graph across all sources, exportable as DOT or JSON.</dd></div>
+    <div><dt>screen NAME | --csv</dt><dd>Sanctions and export-control screening, one name or a whole file.</dd></div>
+    <div><dt>congress flags</dt><dd>House stock trades ranked by committee overlap, late filing, size and contract spikes.</dd></div>
+    <div><dt>near ADDRESS</dt><dd>Representatives, EPA violators, local federal contracts, aircraft operators, quakes.</dd></div>
+    <div><dt>lobby NAME</dt><dd>Lobbying spend, firms, issues, and ex-officials lobbying for a client.</dd></div>
+    <div><dt>shells NAME | ADDRESS</dt><dd>Who else is registered at the same address, with mail drops marked.</dd></div>
+    <div><dt>ppp --flagged</dt><dd>PPP loans that the reported jobs can't explain, and charge-offs.</dd></div>
+    <div><dt>offshore NAME</dt><dd>ICIJ Offshore Leaks entities and their links.</dd></div>
+    <div><dt>grep "PHRASE"</dt><dd>Full-text search over every SEC filing.</dd></div>
+    <div><dt>sky now ADDRESS</dt><dd>Aircraft overhead, with registered owners, from OpenSky or your own receiver.</dd></div>
+    <div><dt>watch add … / run</dt><dd>Watchlists for companies, tails, phrases, lobbying and dockets, with ntfy alerts.</dd></div>
+  </dl>
+  <p class="note">Also: <code>edgar</code>, <code>spend</code>, <code>fec</code>, <code>lei</code>, <code>tail</code>, <code>sam</code>, <code>fara</code>, <code>court</code> and <code>leaks</code>. Add <code>--json</code> before any command to get machine-readable output.</p>
+</section>
+
+<section id="install" class="wrap">
+  <h2><span class="n">04</span> Install</h2>
+  <p class="note">Needs Python and <a href="https://docs.astral.sh/uv/">uv</a>. Most sources work with no keys.</p>
+  <div class="cmd">
+<pre><code><span class="c"># install</span>
+git clone https://github.com/NPCmillionaire/govint
+uv tool install --editable ./govint
+
+<span class="c"># SEC requires a contact in the User-Agent</span>
+govint config contact you@example.com
+
+<span class="c"># optional keys</span>
+govint config data_gov_key &lt;key&gt;      <span class="c"># api.data.gov/signup</span>
+govint config sam_key &lt;key&gt;           <span class="c"># sam.gov &gt; Account Details</span>
+
+<span class="c"># offline datasets</span>
+govint sync csl                       <span class="c"># sanctions, ~30 MB</span>
+govint sync faa                       <span class="c"># aircraft registry</span>
+govint sync offshore                  <span class="c"># ICIJ, ~750 MB on disk</span>
+govint status</code></pre>
+    <button class="copy" type="button" data-copy="git clone https://github.com/NPCmillionaire/govint
+uv tool install --editable ./govint
+govint config contact you@example.com
+govint sync csl
+govint status">copy</button>
+  </div>
+</section>
+
+<section class="wrap caveat">
+  <h2><span class="n">05</span> Read before relying on it</h2>
+  <p>Names are matched fuzzily and scored from 0 to 100. Screening hits at 95 or above are flagged as matches, and hits from 88 to 95 as possible matches. Appearing in a dataset doesn't imply wrongdoing, and a person who shares a name with a record is often someone else. Every line links to its source, so check it there.</p>
+</section>
+
+</main>
+
+<footer class="wrap foot">
+  <span>govint · <a href="https://github.com/NPCmillionaire/govint">github.com/NPCmillionaire/govint</a></span>
+  <span>Data from US government public records.</span>
+</footer>
+
+<script>
+document.querySelectorAll('.copy').forEach(function (b) {
+  if (!navigator.clipboard) { b.hidden = true; return; }
+  b.addEventListener('click', function () {
+    navigator.clipboard.writeText(b.dataset.copy).then(function () {
+      b.textContent = 'copied';
+      setTimeout(function () { b.textContent = 'copy'; }, 1500);
+    }, function () { b.textContent = 'select + copy'; });
+  });
+});
+</script>
+</body>
+</html>
