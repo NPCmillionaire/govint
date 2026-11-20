@@ -11,3 +11,5 @@
 **Approaches:** (1) static HTML page — chosen; (2) static generator (Astro/Hugo) — overkill for one page; (3) Workers + D1 live search — deferred, much larger.
 
 **Decided by user:** option 1 (static info site). **Builder's calls:** dark terminal/dossier aesthetic, exact copy, sample excerpt choice.
+
+**Deploy note (2026-11-19):** wrangler 4.165 turns `pages project create` into a Worker with static assets (`wrangler.jsonc`, assets dir `site`). Kept that. URL: https://govint.noremacnotserp.workers.dev. Redeploy: `npx wrangler deploy`.

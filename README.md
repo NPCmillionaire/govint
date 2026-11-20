@@ -2,6 +2,8 @@
 
 Public-records OSINT from the command line. Give it a company or person name and it searches US government databases, links the results into one entity graph, and writes a sourced dossier.
 
+Website: https://govint.noremacnotserp.workers.dev
+
 ```
 govint brief "Palantir Technologies" -o palantir.md
 ```
