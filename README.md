@@ -4,6 +4,8 @@ Public-records OSINT from the command line. Give it a company or person name and
 
 Website: https://govint.noremacnotserp.workers.dev
 
+![govint demo](docs/demo.gif)
+
 ```
 govint brief "Palantir Technologies" -o palantir.md
 ```
