@@ -1,10 +1,10 @@
-# Regenerate: vhs docs/demo.tape  (needs `govint sync csl` and `govint sync faa` first)
+# Regenerate: vhs docs/demo.tape  (needs `govint sync csl`, `govint sync faa` and `govint config contact` first)
 Output docs/demo.gif
 
 Set Shell "bash"
 Set FontSize 15
 Set Width 1300
-Set Height 640
+Set Height 700
 Set Padding 20
 Set Theme "Dracula"
 Set TypingSpeed 45ms
@@ -29,6 +29,15 @@ Type "govint tail N628TS"
 Sleep 400ms
 Enter
 Sleep 3.5s
+
+Type "clear"
+Enter
+Type "# Which insiders are selling stock?"
+Enter
+Type `govint edgar "Palantir Technologies" --filings 0`
+Sleep 400ms
+Enter
+Sleep 5s
 
 Type "clear"
 Enter
